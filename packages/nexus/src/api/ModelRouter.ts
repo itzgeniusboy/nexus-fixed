@@ -99,7 +99,22 @@ export function providerModelForAlias(aliasInput: string, provider: string): str
 export function vaultProviderOrder(): string[] {
   const vault = loadApiVault()
   return Object.keys(vault.providers).sort((a, b) => {
-    const priority = ["deepseek", "groq", "openrouter", "gemini", "cerebras", "openai"]
+    const priority = [
+      "anthropic",
+      "openai",
+      "deepseek",
+      "groq",
+      "openrouter",
+      "gemini",
+      "xai",
+      "mistral",
+      "cerebras",
+      "togetherai",
+      "fireworks",
+      "moonshotai",
+      "cohere",
+      "perplexity",
+    ]
     return (priority.indexOf(a) === -1 ? 99 : priority.indexOf(a)) - (priority.indexOf(b) === -1 ? 99 : priority.indexOf(b))
   })
 }

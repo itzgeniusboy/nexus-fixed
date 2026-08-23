@@ -1,0 +1,84 @@
+name: assistant-pr-checks
+
+on:
+  pull_request:
+    paths:
+      - "packages/assistant/**"
+      - "packages/nexus/src/api/**"
+      - "packages/nexus/src/cli/cmd/assistant.ts"
+      - ".github/workflows/assistant-pr-checks.yml"
+  push:
+    branches:
+      - feat/assistant-ecosystem
+
+jobs:
+  typecheck:
+    name: assistant typecheck (0 errors required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Typecheck packages/assistant
+        run: bun run --cwd packages/assistant typecheck
+
+  assistant-tests:
+    name: assistant safety tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: bun test (packages/assistant)
+        run: bun test --cwd packages/assistant
+
+  cli-smoke:
+    name: CLI startup + API vault smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Isolated HOME
+        run: echo "HOME=$RUNNER_TEMP/nexus-home" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: |
+          mkdir -p "$HOME"
+          bun install
+      - name: nexus --version / --help
+        run: |
+          bun packages/nexus/src/index.ts --version
+          bun packages/nexus/src/index.ts --help >/dev/null
+      - name: api add + list (non-interactive)
+        run: |
+          bun packages/nexus/src/index.ts api add groq gsk_test-key-for-ci-000000000
+          bun packages/nexus/src/index.ts api add claude sk-ant-test-key-for-ci-0000000000
+          bun packages/nexus/src/index.ts api list
+      - name: api check (fake keys must resolve endpoints — invalid, never silent)
+        run: |
+          output=$(bun packages/nexus/src/index.ts api check || true)
+          echo "$output"
+          echo "$output" | grep -q "groq"
+          echo "$output" | grep -q "anthropic"
+      - name: api route
+        run: bun packages/nexus/src/index.ts api route deepseek
+      - name: assistant command registers
+        run: bun packages/nexus/src/index.ts assistant help
+
+  diff-hygiene:
+    name: git diff --check clean
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - run: |
+          git fetch origin main
+          git diff --check origin/main...HEAD

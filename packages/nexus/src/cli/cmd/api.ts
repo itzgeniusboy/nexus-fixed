@@ -1,6 +1,9 @@
 import type { Argv } from "yargs"
 import { cmd } from "./cmd"
+import * as prompts from "@clack/prompts"
 import {
+  API_PROVIDERS,
+  resolveProviderLabel,
   addApiKey as vaultAddApiKey,
   apiVaultKeyPath,
   apiVaultRows,
@@ -20,14 +23,54 @@ function printError(error: unknown): void {
 
 import { checkKey } from "../../api/ApiVault"
 
+async function runWizard(): Promise<void> {
+  prompts.intro("Add your API key")
+  prompts.log.info("Har provider ke liye key paste karo — skip karne ke liye bas ENTER.")
+
+  let saved = 0
+  for (const provider of API_PROVIDERS) {
+    const label = resolveProviderLabel(provider)
+    const result = await prompts.password({
+      message: `${label} API key (ENTER = skip)`,
+    })
+    if (prompts.isCancel(result) || !result || !result.trim()) continue
+    try {
+      vaultAddApiKey(provider, result.trim())
+      saved++
+      prompts.log.success(`${label} saved (${maskApiKey(result.trim())})`)
+    } catch (error) {
+      prompts.log.warn(`${provider}: ${error instanceof Error ? error.message : "failed"}`)
+    }
+  }
+  prompts.outro(saved > 0 ? `${saved} API key(s) vault mein stored` : "No keys added")
+}
+
 const AddCommand = cmd({
-  command: "add <provider> <key> [label]",
-  describe: "store an API key in the local NEXUS vault",
-  builder: (yargs: Argv) => yargs,
-  async handler(args: { provider: string; key: string; label?: string }) {
+  command: "add [provider] [key] [label]",
+  describe: "store an API key in the local NEXUS vault (no args = multi-provider wizard)",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("provider", {
+        describe:
+          "provider id/alias (openai, anthropic, claude, gemini, groq, openrouter, xai/grok, deepseek, mistral, together, perplexity, cohere, fireworks, kimi, cerebras) — omit for wizard",
+        type: "string",
+      })
+      .positional("key", { type: "string", describe: "API key" })
+      .positional("label", { type: "string", describe: "optional label" }),
+  async handler(args: { provider?: string; key?: string; label?: string }) {
+    if (!args.provider) {
+      await runWizard()
+      return
+    }
+    if (!args.key) {
+      printError(new Error(`Key required. Usage: nexus api add ${args.provider} <key> — or bare 'nexus api add' for the wizard.`))
+      process.exitCode = 1
+      return
+    }
     try {
       const entry = vaultAddApiKey(args.provider, args.key, args.label)
-      process.stdout.write(`✓ ${args.provider.toLowerCase()} key saved (${entry.label})\n`)
+      const label = resolveProviderLabel(normalizeProvider(args.provider) ?? args.provider.toLowerCase())
+      process.stdout.write(`✓ ${label} key saved (${entry.label})\n`)
       process.stdout.write(`  Vault: ${apiVaultKeyPath()}\n`)
       process.stdout.write(`  Stored: ${maskApiKey(entry.key)}\n`)
     } catch (error) {
@@ -116,9 +159,18 @@ const RouteCommand = cmd({
   },
 })
 
+const WizardDefault = cmd({
+  command: "$0",
+  describe: "open the multi-provider API key wizard",
+  builder: (yargs: Argv) => yargs,
+  async handler() {
+    await runWizard()
+  },
+})
+
 export const ApiCommand = cmd({
   command: "api",
   describe: "manage API keys and smart model routing",
-  builder: (yargs: Argv) => yargs.command(AddCommand).command(ListCommand).command(CheckCommand).command(RemoveCommand).command(RotateCommand).command(RouteCommand).demandCommand(),
+  builder: (yargs: Argv) => yargs.command(WizardDefault).command(AddCommand).command(ListCommand).command(CheckCommand).command(RemoveCommand).command(RotateCommand).command(RouteCommand),
   async handler() {},
 })

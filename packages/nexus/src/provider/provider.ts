@@ -40,6 +40,7 @@ import {
   PREFERRED_MODELS,
 } from "./rotation"
 import { apiVaultKeyEntries, getApiVaultStatus, verifyAllVaultKeys, getCachedKeyStatus } from "../api/ApiVault"
+import { PROVIDER_CONTRACTS } from "../api/providers"
 
 function mergeApiVaultKeys(configured: unknown): Record<string, string[]> {
   const result: Record<string, string[]> = {}
@@ -91,29 +92,23 @@ function localFallbackModel(id: string): ModelsDev.Model {
   }
 }
 
-const LOCAL_FALLBACK_PROVIDERS: Record<string, Omit<LocalFallbackProvider, "models">> = {
-  groq: {
-    id: "groq",
-    name: "Groq",
-    api: "https://api.groq.com/openai/v1",
-    env: ["GROQ_API_KEY"],
-    npm: "@ai-sdk/groq",
-  },
-  openrouter: {
-    id: "openrouter",
-    name: "OpenRouter",
-    api: "https://openrouter.ai/api/v1",
-    env: ["OPENROUTER_API_KEY"],
-    npm: "@openrouter/ai-sdk-provider",
-  },
-  google: {
-    id: "google",
-    name: "Gemini",
-    api: "https://generativelanguage.googleapis.com/v1beta",
-    env: ["GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
-    npm: "@ai-sdk/google",
-  },
-}
+// Derived from the provider registry so a listed provider can never lack an
+// offline transport definition. `gemini` maps to the catalog id `google`.
+const LOCAL_FALLBACK_PROVIDERS: Record<string, Omit<LocalFallbackProvider, "models">> = Object.fromEntries(
+  Object.values(PROVIDER_CONTRACTS).map((contract) => {
+    const catalogId = contract.id === "gemini" ? "google" : contract.id
+    return [
+      catalogId,
+      {
+        id: catalogId,
+        name: contract.label.replace(/\s*\(.*\)\s*/, ""),
+        api: contract.baseURL,
+        env: contract.env.length > 0 ? contract.env : [`${contract.id.toUpperCase()}_API_KEY`],
+        npm: contract.npm,
+      },
+    ]
+  }),
+)
 
 export function withLocalFallbackCatalog(
   catalog: Record<string, ModelsDev.Provider>,
