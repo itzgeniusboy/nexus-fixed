@@ -138,7 +138,7 @@ async function dispatch(pluginName: string, rest: string[], args: Record<string,
   const ctx = makeContext({
     cwd,
     env: detectEnvironment(),
-    args: commandArgs.length > 0 ? commandArgs : rest.filter((token) => !token.startsWith("-")),
+    args: commandArgs,
     flags,
     out: (message) => process.stderr.write(message + EOL),
     err: (message) => process.stderr.write(`${Style.TEXT_DANGER}${message}${Style.TEXT_NORMAL}${EOL}`),

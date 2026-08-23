@@ -18,4 +18,3 @@ describe("API vault provider validation contracts", () => {
     expect(PROVIDER_CONTRACTS.perplexity.baseURL).toBe("https://api.perplexity.ai/router/v1")
   })
 })
-

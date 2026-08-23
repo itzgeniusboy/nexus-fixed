@@ -34,4 +34,8 @@ describe("safe local write guards", () => {
     expect(recoverySaveRequest(["save"], { name: "release" })).toEqual({ name: "release" })
     expect(recoverySaveRequest(["save", "before-refactor"], { path: "../project" })).toEqual({ project: "../project", name: "before-refactor" })
   })
+
+  test("recovery ignores a legacy command token when one is supplied by an older dispatcher", () => {
+    expect(recoverySaveRequest(["save"], {})).toEqual({})
+  })
 })
