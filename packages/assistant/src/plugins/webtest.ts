@@ -1,5 +1,6 @@
 import path from "path"
 import { Style, Icon, ok, bad, dim } from "../core/style"
+import { requireAuthorizedTarget } from "../core/security"
 
 const EOL = "\n"
 import type { NexusPlugin, PluginContext } from "../core/types"
@@ -307,6 +308,7 @@ async function visual(ctx: PluginContext): Promise<number | void> {
     return 1
   }
   if (!/^https?:\/\//.test(url)) url = "https://" + url
+  if (!(await requireAuthorizedTarget(ctx, url, "visual QA"))) return 1
 
   const status = await checkPlaywright()
   if (!status.ok) {
@@ -403,6 +405,7 @@ async function record(ctx: PluginContext): Promise<number | void> {
     }
     url = "https://" + bare
   }
+  if (!(await requireAuthorizedTarget(ctx, url, "screen-to-code recording"))) return 1
 
   ctx.out(`${Icon.robot} NEXUS Screen-to-Code Recorder`)
   ctx.out(dim("Perform your actions in the opened browser. Password fields are NEVER recorded."))
@@ -469,16 +472,18 @@ async function run(ctx: PluginContext): Promise<number | void> {
     return 1
   }
   if (!/^https?:\/\//.test(url)) url = "https://" + url
+  if (!(await requireAuthorizedTarget(ctx, url, "WebTest"))) return 1
+
+  if (typeof ctx.flags.watch !== "undefined" && ctx.flags.watch !== false) {
+    ctx.err("Recurring watch mode is disabled. Run a one-shot authorized test when you need it.")
+    return 1
+  }
 
   const scenarioName = typeof ctx.flags.scenario === "string" ? ctx.flags.scenario : "smoke"
 
   const status = await checkPlaywright()
   if (!status.ok) {
     const code = await runNoBrowser(ctx, url, scenarioName)
-
-    if (typeof ctx.flags.watch !== "undefined" && ctx.flags.watch !== false) {
-      return watchLoop(ctx, url, () => fetchProbe(url).then((c) => c.status >= 400 ? 1 : 0))
-    }
     return code
   }
 
@@ -533,6 +538,15 @@ async function run(ctx: PluginContext): Promise<number | void> {
         process.stderr.write(`${Style.TEXT_HIGHLIGHT_BOLD}Press ENTER when done...${Style.TEXT_NORMAL}${EOL}`)
         await new Promise<void>((resolve) => process.stdin.once("data", () => resolve()))
       } else if (step.action === "click" && step.selector) {
+        if (ctx.flags.allowInteraction !== true) {
+          throw new Error("interactive browser actions are disabled by default; rerun with --allow-interaction and confirm the exact step")
+        }
+        const approved = await ctx.confirm({
+          title: `Allow browser interaction for step ${index}?`,
+          detail: `Selector: ${step.selector}. NEXUS will not enter credentials, OTPs, or payment data.`,
+          danger: true,
+        })
+        if (!approved) throw new Error("human declined the browser interaction")
         const found = await page.locator(step.selector).first().isVisible().catch(() => false)
         if (!found) throw new Error(`click target not visible: ${step.selector}`)
         await page.locator(step.selector).first().click({ timeout: 8000 })
@@ -575,38 +589,7 @@ async function run(ctx: PluginContext): Promise<number | void> {
     await writeReports(ctx, url, { passed, failed, logs, networkErrors, bugs })
   }
 
-  if (typeof ctx.flags.watch !== "undefined" && ctx.flags.watch !== false) {
-    return watchLoop(ctx, url, async () => {
-      const rerun = await run({ ...ctx, flags: { ...ctx.flags, watch: false }, args: [...ctx.args] })
-      return typeof rerun === "number" ? rerun : 0
-    })
-  }
-
   return failed === 0 ? 0 : 1
-}
-
-function parseInterval(value: unknown): number {
-  const raw = typeof value === "string" && value ? value : "30m"
-  const num = parseInt(raw) || 30
-  if (raw.endsWith("s")) return num * 1000
-  if (raw.endsWith("h")) return num * 3600 * 1000
-  return num * 60 * 1000
-}
-
-async function watchLoop(ctx: PluginContext, url: string, once: () => Promise<number>): Promise<number> {
-  const interval = parseInterval(ctx.flags.watch === true ? undefined : ctx.flags.watch)
-  ctx.out(`${Icon.eye} Watch mode: re-checking ${url} every ${Math.round(interval / 60000)}min (Ctrl+C to stop)`)
-  for (;;) {
-    try {
-      await once()
-    } catch (error) {
-      ctx.err(String(error))
-    }
-    if (ctx.flags.notify === true) {
-      Bun.spawn(["termux-notification", "--title", "NEXUS WebTest", "--content", `${url} re-checked`], { stdout: "ignore", stderr: "ignore" })
-    }
-    await new Promise((r) => setTimeout(r, interval))
-  }
 }
 
 interface ReportData {
@@ -682,19 +665,19 @@ const plugin: NexusPlugin = {
     {
       name: "run",
       describe: "test a website with optional bug reports, watch mode and regression baseline",
-      usage: "nexus webtest run <url> [--scenario smoke|headers|forms|login|purchase] [--report bugs] [--watch 30m] [--notify] [--baseline old.json]",
+      usage: "nexus webtest run <url> --authorize-target [--scenario smoke|headers|forms|login|purchase] [--report bugs] [--baseline old.json]",
       run,
     },
     {
       name: "visual",
       describe: "multi-viewport visual QA (desktop/tablet/mobile screenshots + AI vision, http-only fallback)",
-      usage: "nexus webtest visual <url>",
+      usage: "nexus webtest visual <url> --authorize-target",
       run: visual,
     },
     {
       name: "record",
       describe: "screen-to-code recorder — perform actions in a browser, get a Playwright spec",
-      usage: "nexus webtest record <url> [--output ./tests/login.spec.js]",
+      usage: "nexus webtest record <url> --authorize-target [--output ./tests/login.spec.js]",
       run: record,
     },
   ],

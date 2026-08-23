@@ -1727,7 +1727,9 @@ const layer = Layer.effect(
           if (!apiKey) continue
           mergeProvider(providerID, {
             source: "env",
-            key: apiKey, // Keep the resolved key regardless of how many env vars were checked
+            // Preserve the existing contract: an ambiguous multi-variable provider
+            // is loaded from the environment but does not expose one selected key.
+            ...(provider.env.length === 1 ? { key: apiKey } : {}),
           })
         }
 
@@ -2181,8 +2183,8 @@ const layer = Layer.effect(
           const preferred = modelForProvider(configured.providerID, provider.models)
           if (preferred) return { providerID: configured.providerID, modelID: preferred }
         }
-        if (provider && provider.models[configured.modelID] && !isDeprecatedFreeProvider(provider.id)) return configured
-        // If the configured model is stale or its provider doesn't exist, fall through to recent/defaults
+        if (provider && !isDeprecatedFreeProvider(provider.id)) return configured
+        // If the configured provider does not exist, fall through to recent/defaults.
       }
 
       

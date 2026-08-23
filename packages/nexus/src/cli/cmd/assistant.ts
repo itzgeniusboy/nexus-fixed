@@ -35,6 +35,9 @@ const FLAG_OPTIONS = [
   ["noVerify", { type: "boolean", describe: "skip critical review gate" }],
   ["dryRun", { type: "boolean", describe: "show what would happen" }],
   ["newProfile", { type: "boolean", describe: "isolated browser profile" }],
+  ["connectExisting", { type: "boolean", describe: "attach only to a user-started loopback CDP browser" }],
+  ["authorizeTarget", { type: "boolean", describe: "confirm ownership or authorization for a browser/HTTP target" }],
+  ["allowInteraction", { type: "boolean", describe: "allow one human-confirmed non-sensitive browser interaction" }],
   ["task", { type: "string", describe: "task description" }],
 ] as const
 

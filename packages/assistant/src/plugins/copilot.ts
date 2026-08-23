@@ -1,23 +1,8 @@
 import os from "os"
 import path from "path"
 import { Style, Icon, dim } from "../core/style"
-import { isSensitiveUrl } from "../core/security"
+import { requireAuthorizedTarget } from "../core/security"
 import type { NexusPlugin, PluginContext } from "../core/types"
-
-function userDataDir(browser: string): string {
-  const home = os.homedir()
-  switch (process.platform) {
-    case "darwin":
-      if (browser === "edge") return path.join(home, "Library/Application Support/Microsoft Edge")
-      return path.join(home, "Library/Application Support/Google/Chrome")
-    case "win32":
-      if (browser === "edge") return path.join(home, "AppData/Local/Microsoft/Edge/User Data")
-      return path.join(home, "AppData/Local/Google/Chrome/User Data")
-    default:
-      if (browser === "edge") return path.join(home, ".config/microsoft-edge")
-      return path.join(home, ".config/google-chrome")
-  }
-}
 
 const LOGIN_INDICATORS = ["login", "signin", "sign-in", "auth", "cpsess", "wp-login"]
 
@@ -35,6 +20,7 @@ const DASHBOARD_SELECTORS = [
 ]
 
 const DEDICATED_PROFILE = path.join(os.homedir(), ".nexus", "browser-profile")
+export const COPILOT_LAUNCH_ARGS = ["--no-first-run", "--no-default-browser-check"]
 
 async function isLoggedIn(page: import("playwright-core").Page): Promise<boolean> {
   const currentUrl = page.url().toLowerCase()
@@ -70,8 +56,8 @@ async function waitForLogin(page: import("playwright-core").Page, ctx: PluginCon
       }
       await new Promise((r) => setTimeout(r, 1500))
     }
-    ctx.out(dim("Waited 5 minutes — continuing anyway."))
-    return true
+    ctx.out(dim("Login was not confirmed within 5 minutes — session closed without continuing."))
+    return false
   } finally {
     process.stdin.removeListener("data", stdinListener)
     process.stdin.pause()
@@ -87,6 +73,7 @@ async function doTask(ctx: PluginContext): Promise<number | void> {
     ctx.err('Usage: nexus copilot do --url https://host:2083 "database banao"')
     return 1
   }
+  if (!(await requireAuthorizedTarget(ctx, url, "browser co-pilot"))) return 1
 
   const pw = await import("playwright-core")
     .then(() => ({ ok: true as const }))
@@ -105,6 +92,10 @@ async function doTask(ctx: PluginContext): Promise<number | void> {
 
   if (ctx.flags.connectExisting === true) {
     const port = typeof ctx.flags.port === "number" ? ctx.flags.port : 9222
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+      ctx.err("A valid local CDP port is required (1024-65535).")
+      return 1
+    }
     try {
       const browser = await chromium.connectOverCDP(`http://localhost:${port}`)
       context = browser.contexts()[0] ?? (await browser.newContext())
@@ -115,38 +106,20 @@ async function doTask(ctx: PluginContext): Promise<number | void> {
       return 1
     }
   } else {
-    const useMainProfile = ctx.flags.useProfile === true
-    const isolated = ctx.flags.newProfile === true
-    let profileDir = DEDICATED_PROFILE
-
-    if (isolated) {
-      profileDir = path.join(os.tmpdir(), "nexus-copilot-profile")
-      ctx.out(dim("Isolated profile — logins will NOT be remembered."))
-    } else if (useMainProfile) {
-      const consent = await ctx.confirm({
-        title: `Use your existing ${browserName} profile?`,
-        detail: "Your logged-in sessions will be accessible to this task. Sessions never leave your machine.",
-        danger: false,
-      })
-      if (!consent) {
-        ctx.out("Falling back to the dedicated NEXUS profile.")
-        useMainProfileFallback(ctx)
-      } else {
-        profileDir = userDataDir(browserName)
-      }
-    } else {
-      useMainProfileFallback(ctx)
-    }
-
-    function useMainProfileFallback(ctx_: PluginContext): void {
-      ctx_.out(dim("Using dedicated NEXUS profile (~/.nexus/browser-profile) — login once, remembered forever."))
-    }
+    const profileDir = ctx.flags.newProfile === true ? path.join(os.tmpdir(), "nexus-copilot-profile") : DEDICATED_PROFILE
+    ctx.out(
+      dim(
+        ctx.flags.newProfile === true
+          ? "Temporary NEXUS profile — logins will not be remembered."
+          : "Using dedicated NEXUS profile (~/.nexus/browser-profile); your normal browser profile is never opened.",
+      ),
+    )
 
     await import("fs/promises").then((fs) => fs.mkdir(profileDir, { recursive: true }))
     context = await chromium.launchPersistentContext(profileDir, {
       headless: false,
       channel: browserName === "chrome" ? "chrome" : "msedge",
-      args: ["--no-first-run", "--no-default-browser-check", "--disable-blink-features=AutomationControlled"],
+      args: COPILOT_LAUNCH_ARGS,
     })
     page = context.pages()[0] ?? (await context.newPage())
   }
@@ -164,7 +137,11 @@ async function doTask(ctx: PluginContext): Promise<number | void> {
   if (await isLoggedIn(page).catch(() => false)) {
     ctx.out(`${Icon.success} Session active — NO login needed!`)
   } else {
-    await waitForLogin(page, ctx)
+    const loggedIn = await waitForLogin(page, ctx)
+    if (!loggedIn) {
+      if (ctx.flags.connectExisting !== true) await context.close()
+      return 1
+    }
     ctx.out(dim("Session saved in profile — next time login skip ho jayega."))
   }
 
