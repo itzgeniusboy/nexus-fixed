@@ -1,0 +1,108 @@
+name: assistant-pr-checks
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  typecheck:
+    name: assistant typecheck (0 errors required)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Typecheck packages/assistant
+        run: bun run --cwd packages/assistant typecheck
+
+  assistant-tests:
+    name: assistant redact/secret-store/safety/safe-writes/safety-boundaries tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Neutralize root bunfig test-root guard (package-local run)
+        working-directory: packages/assistant
+        run: printf '[test]\n' > bunfig.toml
+      - name: Focused assistant suite
+        working-directory: packages/assistant
+        run: >
+          bun test --timeout 30000
+          src/core/redact.test.ts
+          src/core/secret-store.test.ts
+          src/plugins/safety.test.ts
+          src/plugins/safe-writes.test.ts
+          src/plugins/safety-boundaries.test.ts
+
+  nexus-contract-tests:
+    name: nexus provider/rotation/session-llm/provider-error/api-vault contract tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Install dependencies
+        run: bun install
+      - name: Provider lifecycle isolation (sequential)
+        working-directory: packages/nexus
+        run: bun test --timeout 30000 --concurrency 1 test/provider/provider.test.ts
+      - name: Remaining NEXUS contracts
+        working-directory: packages/nexus
+        run: >
+          bun test --timeout 30000
+          test/provider/rotation.test.ts
+          test/session/llm.test.ts
+          test/provider/error.test.ts
+          test/api/vault-contract.test.ts
+
+  cli-smoke:
+    name: isolated HOME CLI + API vault fake-key smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Isolated HOME
+        run: echo "HOME=$RUNNER_TEMP/nexus-home" >> "$GITHUB_ENV"
+      - name: Install dependencies
+        run: |
+          mkdir -p "$HOME"
+          bun install
+      - name: nexus --version / --help
+        run: |
+          bun packages/nexus/src/index.ts --version
+          bun packages/nexus/src/index.ts --help >/dev/null
+      - name: api add + list (non-interactive, fake keys)
+        run: |
+          bun packages/nexus/src/index.ts api add groq gsk_test-key-for-ci-000000000
+          bun packages/nexus/src/index.ts api add claude sk-ant-test-key-for-ci-0000000000
+          bun packages/nexus/src/index.ts api list
+      - name: api check (fake keys must resolve endpoints — invalid, never silent)
+        run: |
+          output=$(bun packages/nexus/src/index.ts api check || true)
+          echo "$output"
+          echo "$output" | grep -q "groq"
+          echo "$output" | grep -q "anthropic"
+      - name: api route
+        run: bun packages/nexus/src/index.ts api route deepseek
+      - name: assistant command registers
+        run: bun packages/nexus/src/index.ts assistant help
+
+  diff-hygiene:
+    name: git diff --check clean
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: git diff --check origin/main...HEAD
+        run: git diff --check origin/main...HEAD
