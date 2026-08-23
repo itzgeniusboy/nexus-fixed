@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import os from "node:os"
+import path from "node:path"
 
 export type RuntimeEnvironment = "termux" | "proot" | "andronix" | "userland" | "wsl" | "macos" | "linux" | "windows"
 
@@ -44,3 +45,15 @@ export const detectRuntimeEnvironment = (probe: RuntimeProbe = systemProbe()): R
 }
 
 export const isNativeTermux = (probe?: RuntimeProbe) => detectRuntimeEnvironment(probe) === "termux"
+
+/**
+ * Android's `/tmp` may be present but not writable from the Termux app
+ * sandbox. Native Termux always has a writable `${PREFIX}/tmp`; container
+ * runtimes deliberately keep their own normal temporary-directory behavior.
+ */
+export const runtimeTempDirectory = (probe: RuntimeProbe = systemProbe()): string => {
+  if (isNativeTermux(probe)) {
+    return path.join(probe.env.PREFIX ?? "/data/data/com.termux/files/usr", "tmp")
+  }
+  return probe.env.TMPDIR || os.tmpdir()
+}

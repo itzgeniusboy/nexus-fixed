@@ -6,13 +6,14 @@ import { Context, Effect, Layer } from "effect"
 import { Flock } from "./util/flock"
 import { Flag } from "./flag/flag"
 import { makeGlobalNode } from "./effect/app-node"
+import { runtimeTempDirectory } from "./platform"
 
 const app = "nexus"
 const data = path.join(xdgData!, app)
 const cache = path.join(xdgCache!, app)
 const config = path.join(xdgConfig!, app)
 const state = path.join(xdgState!, app)
-const tmp = path.join(os.tmpdir(), app)
+const tmp = path.join(runtimeTempDirectory(), app)
 
 const paths = {
   get home() {
