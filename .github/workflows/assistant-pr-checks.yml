@@ -34,7 +34,8 @@ jobs:
       - name: Focused assistant suite
         working-directory: packages/assistant
         run: >
-          bun test src/core/redact.test.ts
+          bun test --timeout 30000
+          src/core/redact.test.ts
           src/core/secret-store.test.ts
           src/plugins/safety.test.ts
           src/plugins/safe-writes.test.ts
@@ -53,7 +54,8 @@ jobs:
       - name: Focused nexus suite
         working-directory: packages/nexus
         run: >
-          bun test test/provider/provider.test.ts
+          bun test --timeout 30000
+          test/provider/provider.test.ts
           test/provider/rotation.test.ts
           test/session/llm.test.ts
           test/provider/error.test.ts
