@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import { Global } from "@nexus-ai/core/global"
 import { redactSensitive } from "@nexus-ai/assistant/core/redact"
 
-export const AGENT_PLATFORM_SCHEMA_VERSION = 1
+export const AGENT_PLATFORM_SCHEMA_VERSION = 2
 
 export type MemoryScope = "device" | "project" | "channel"
 export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "instruction"
@@ -66,6 +66,30 @@ export type AgentSchedule = {
   updatedAt: number
 }
 
+export type GatewayChannel = "telegram" | "discord" | "slack"
+export type GatewayConnection = {
+  id: string
+  channel: GatewayChannel
+  label: string
+  credentialRef: string
+  allowedSenders: string[]
+  enabled: boolean
+  createdAt: number
+  updatedAt: number
+}
+export type GatewayEventReservation = {
+  accepted: boolean
+  reason?: "connection_disabled" | "sender_not_allowed" | "duplicate"
+  eventRecordId?: string
+}
+export type ScheduleExecutionClaim = {
+  id: string
+  scheduleId: string
+  scheduledWindow: string
+  claimed: boolean
+  leaseExpiresAt?: number
+}
+
 type StoreOptions = { path?: string }
 
 function now() {
@@ -123,6 +147,27 @@ function decodeRun(row: Record<string, unknown>): AgentRun {
   }
 }
 
+function decodeGatewayConnection(row: Record<string, unknown>): GatewayConnection {
+  return {
+    id: String(row.id),
+    channel: row.channel as GatewayChannel,
+    label: String(row.label),
+    credentialRef: String(row.credential_ref),
+    allowedSenders: JSON.parse(String(row.allowed_senders_json)) as string[],
+    enabled: asBoolean(row.enabled),
+    createdAt: Number(row.time_created),
+    updatedAt: Number(row.time_updated),
+  }
+}
+
+function assertCredentialReference(value: string) {
+  const ref = value.trim()
+  if (!/^credential:\/\/[a-z0-9._/-]+$/i.test(ref)) {
+    throw new Error("Gateway credentials must be an opaque credential:// reference, never a raw token")
+  }
+  return ref
+}
+
 export function defaultAgentPlatformPath() {
   return process.env.NEXUS_AGENT_DB || join(Global.Path.data, "agent-platform.db")
 }
@@ -152,7 +197,7 @@ export class AgentPlatformStore {
     const row = this.db.query("PRAGMA user_version").get() as { user_version?: number } | null
     const version = Number(row?.user_version ?? 0)
     if (version >= AGENT_PLATFORM_SCHEMA_VERSION) return
-    this.db.exec(`
+    if (version < 1) this.db.exec(`
       CREATE TABLE IF NOT EXISTS agent_memory (
         id TEXT PRIMARY KEY,
         scope TEXT NOT NULL,
@@ -223,7 +268,65 @@ export class AgentPlatformStore {
         detail_json TEXT NOT NULL,
         time_created INTEGER NOT NULL
       );
-      PRAGMA user_version = ${AGENT_PLATFORM_SCHEMA_VERSION};
+      PRAGMA user_version = 1;
+    `)
+    if (version < 2) this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_adapter_connection (
+        id TEXT PRIMARY KEY,
+        channel TEXT NOT NULL,
+        label TEXT NOT NULL,
+        credential_ref TEXT NOT NULL,
+        allowed_senders_json TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        UNIQUE(channel, label)
+      );
+      CREATE TABLE IF NOT EXISTS agent_gateway_event (
+        id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL REFERENCES agent_adapter_connection(id) ON DELETE CASCADE,
+        event_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        dispatch_status TEXT NOT NULL,
+        time_received INTEGER NOT NULL,
+        UNIQUE(connection_id, event_id)
+      );
+      CREATE TABLE IF NOT EXISTS agent_delivery (
+        id TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL REFERENCES agent_adapter_connection(id) ON DELETE CASCADE,
+        run_id TEXT REFERENCES agent_run(id) ON DELETE SET NULL,
+        conversation_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        provider_message_id TEXT,
+        detail_json TEXT NOT NULL,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS agent_schedule_execution (
+        id TEXT PRIMARY KEY,
+        schedule_id TEXT NOT NULL REFERENCES agent_schedule(id) ON DELETE CASCADE,
+        scheduled_window TEXT NOT NULL,
+        run_id TEXT REFERENCES agent_run(id) ON DELETE SET NULL,
+        status TEXT NOT NULL,
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        lease_expires_at INTEGER,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        UNIQUE(schedule_id, scheduled_window)
+      );
+      CREATE TABLE IF NOT EXISTS agent_memory_replica (
+        id TEXT PRIMARY KEY,
+        scope TEXT NOT NULL,
+        scope_id TEXT NOT NULL,
+        remote_id TEXT NOT NULL,
+        cursor TEXT,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        UNIQUE(scope, scope_id, remote_id)
+      );
+      PRAGMA user_version = 2;
     `)
   }
 
@@ -375,6 +478,98 @@ export class AgentPlatformStore {
       createdAt: Number(row.time_created),
       updatedAt: Number(row.time_updated),
     } satisfies AgentSchedule))
+  }
+
+  setScheduleEnabled(id: string, input: { enabled: boolean; confirmed: boolean }) {
+    if (!input.confirmed) throw new Error("Schedule enablement requires an explicit confirmation")
+    const timestamp = now()
+    const result = this.db.query("UPDATE agent_schedule SET enabled = ?, time_updated = ? WHERE id = ?").run(input.enabled ? 1 : 0, timestamp, id)
+    if (!result.changes) throw new Error(`Schedule not found: ${id}`)
+    this.audit(input.enabled ? "schedule.enabled" : "schedule.disabled", "schedule", id, {})
+  }
+
+  registerGatewayConnection(input: { channel: GatewayChannel; label: string; credentialRef: string; allowedSenders: string[] }) {
+    const timestamp = now()
+    const label = input.label.trim()
+    const allowedSenders = [...new Set(input.allowedSenders.map((sender) => sender.trim()).filter(Boolean))]
+    if (!label) throw new Error("Gateway connection label is required")
+    if (!allowedSenders.length) throw new Error("Gateway connection requires at least one explicit allowed sender")
+    const credentialRef = assertCredentialReference(input.credentialRef)
+    const connection: GatewayConnection = {
+      id: randomUUID(),
+      channel: input.channel,
+      label,
+      credentialRef,
+      allowedSenders,
+      enabled: false,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    this.db.query("INSERT INTO agent_adapter_connection (id, channel, label, credential_ref, allowed_senders_json, enabled, time_created, time_updated) VALUES (?, ?, ?, ?, ?, 0, ?, ?)")
+      .run(connection.id, connection.channel, connection.label, connection.credentialRef, JSON.stringify(connection.allowedSenders), timestamp, timestamp)
+    this.audit("gateway.connection_registered", "adapter_connection", connection.id, { channel: connection.channel, enabled: false })
+    return connection
+  }
+
+  listGatewayConnections() {
+    return (this.db.query("SELECT * FROM agent_adapter_connection ORDER BY time_created DESC").all() as Record<string, unknown>[]).map(decodeGatewayConnection)
+  }
+
+  setGatewayConnectionEnabled(id: string, enabled: boolean) {
+    const timestamp = now()
+    const result = this.db.query("UPDATE agent_adapter_connection SET enabled = ?, time_updated = ? WHERE id = ?").run(enabled ? 1 : 0, timestamp, id)
+    if (!result.changes) throw new Error(`Gateway connection not found: ${id}`)
+    this.audit(enabled ? "gateway.connection_enabled" : "gateway.connection_disabled", "adapter_connection", id, {})
+  }
+
+  reserveGatewayEvent(input: { connectionId: string; eventId: string; senderId: string; conversationId: string }): GatewayEventReservation {
+    const connectionRow = this.db.query("SELECT * FROM agent_adapter_connection WHERE id = ?").get(input.connectionId) as Record<string, unknown> | null
+    if (!connectionRow) throw new Error(`Gateway connection not found: ${input.connectionId}`)
+    const connection = decodeGatewayConnection(connectionRow)
+    if (!connection.enabled) return { accepted: false, reason: "connection_disabled" }
+    if (!connection.allowedSenders.includes(input.senderId)) return { accepted: false, reason: "sender_not_allowed" }
+    const eventId = input.eventId.trim()
+    if (!eventId || !input.senderId.trim() || !input.conversationId.trim()) throw new Error("Gateway event requires non-empty event, sender, and conversation identifiers")
+    const id = randomUUID()
+    const result = this.db.query("INSERT OR IGNORE INTO agent_gateway_event (id, connection_id, event_id, sender_id, conversation_id, dispatch_status, time_received) VALUES (?, ?, ?, ?, ?, 'reserved', ?)")
+      .run(id, connection.id, eventId, input.senderId, input.conversationId, now())
+    if (!result.changes) return { accepted: false, reason: "duplicate" }
+    this.audit("gateway.event_reserved", "gateway_event", id, { connectionId: connection.id, eventId })
+    return { accepted: true, eventRecordId: id }
+  }
+
+  recordDelivery(input: { connectionId: string; conversationId: string; runId?: string; detail?: Record<string, unknown> }) {
+    const timestamp = now()
+    const id = randomUUID()
+    this.db.query("INSERT INTO agent_delivery (id, connection_id, run_id, conversation_id, status, detail_json, time_created, time_updated) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?)")
+      .run(id, input.connectionId, input.runId ?? null, input.conversationId, JSON.stringify(input.detail ?? {}), timestamp, timestamp)
+    this.audit("gateway.delivery_queued", "delivery", id, { connectionId: input.connectionId, runId: input.runId })
+    return id
+  }
+
+  claimScheduleExecution(input: { scheduleId: string; scheduledWindow: string; leaseMs?: number }): ScheduleExecutionClaim {
+    const schedule = this.db.query("SELECT * FROM agent_schedule WHERE id = ?").get(input.scheduleId) as Record<string, unknown> | null
+    if (!schedule) throw new Error(`Schedule not found: ${input.scheduleId}`)
+    if (!asBoolean(schedule.enabled)) throw new Error("Cannot claim a disabled schedule")
+    if (!input.scheduledWindow.trim()) throw new Error("Schedule execution requires a non-empty scheduled window")
+    const timestamp = now()
+    const existing = this.db.query("SELECT * FROM agent_schedule_execution WHERE schedule_id = ? AND scheduled_window = ?").get(input.scheduleId, input.scheduledWindow) as Record<string, unknown> | null
+    if (existing) return { id: String(existing.id), scheduleId: input.scheduleId, scheduledWindow: input.scheduledWindow, claimed: false, leaseExpiresAt: existing.lease_expires_at == null ? undefined : Number(existing.lease_expires_at) }
+    const claim: ScheduleExecutionClaim = {
+      id: randomUUID(),
+      scheduleId: input.scheduleId,
+      scheduledWindow: input.scheduledWindow,
+      claimed: true,
+      leaseExpiresAt: timestamp + Math.max(10_000, Math.min(input.leaseMs ?? 60_000, 15 * 60_000)),
+    }
+    const result = this.db.query("INSERT OR IGNORE INTO agent_schedule_execution (id, schedule_id, scheduled_window, status, retry_count, lease_expires_at, time_created, time_updated) VALUES (?, ?, ?, 'claimed', 0, ?, ?, ?)")
+      .run(claim.id, claim.scheduleId, claim.scheduledWindow, claim.leaseExpiresAt, timestamp, timestamp)
+    if (!result.changes) {
+      const replay = this.db.query("SELECT * FROM agent_schedule_execution WHERE schedule_id = ? AND scheduled_window = ?").get(input.scheduleId, input.scheduledWindow) as Record<string, unknown>
+      return { id: String(replay.id), scheduleId: input.scheduleId, scheduledWindow: input.scheduledWindow, claimed: false, leaseExpiresAt: replay.lease_expires_at == null ? undefined : Number(replay.lease_expires_at) }
+    }
+    this.audit("schedule.execution_claimed", "schedule_execution", claim.id, { scheduleId: claim.scheduleId, scheduledWindow: claim.scheduledWindow })
+    return claim
   }
 
   private audit(action: string, entityType: string, entityId: string, detail: Record<string, unknown>) {

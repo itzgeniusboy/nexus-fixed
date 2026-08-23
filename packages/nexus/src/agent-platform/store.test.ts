@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AgentPlatformStore } from "./store"
+import { planGatewayRun } from "./gateway"
 
 const roots: string[] = []
 
@@ -54,6 +55,29 @@ describe("AgentPlatformStore", () => {
     expect(first.status).toBe("queued")
     expect(first.policy).toEqual({ maxChildren: 2, maxParallel: 3, budgetClass: "low" })
     expect(store.listRuns()).toHaveLength(1)
+    store.close()
+  })
+
+  test("keeps gateway connections disabled until explicitly enabled and rejects unauthorized or duplicate events", () => {
+    const store = makeStore()
+    expect(() => store.registerGatewayConnection({ channel: "telegram", label: "personal", credentialRef: "12345:raw-token", allowedSenders: ["user-1"] })).toThrow("credential://")
+    const connection = store.registerGatewayConnection({ channel: "telegram", label: "personal", credentialRef: "credential://telegram/personal", allowedSenders: ["user-1"] })
+    expect(store.reserveGatewayEvent({ connectionId: connection.id, eventId: "42", senderId: "user-1", conversationId: "chat-1" })).toEqual({ accepted: false, reason: "connection_disabled" })
+    store.setGatewayConnectionEnabled(connection.id, true)
+    expect(store.reserveGatewayEvent({ connectionId: connection.id, eventId: "42", senderId: "user-2", conversationId: "chat-1" })).toEqual({ accepted: false, reason: "sender_not_allowed" })
+    expect(planGatewayRun(store, { schemaVersion: 1, connectionId: connection.id, eventId: "42", senderId: "user-1", conversationId: "chat-1" }).run?.mode).toBe("channel")
+    expect(store.reserveGatewayEvent({ connectionId: connection.id, eventId: "42", senderId: "user-1", conversationId: "chat-1" })).toEqual({ accepted: false, reason: "duplicate" })
+    expect(store.listRuns()).toHaveLength(1)
+    store.close()
+  })
+
+  test("claims an enabled schedule window once and requires explicit confirmation before enablement", () => {
+    const store = makeStore()
+    const schedule = store.createSchedule({ name: "gateway-review", expression: "0 9 * * *", payload: "review project" })
+    expect(() => store.setScheduleEnabled(schedule.id, { enabled: true, confirmed: false })).toThrow("explicit confirmation")
+    store.setScheduleEnabled(schedule.id, { enabled: true, confirmed: true })
+    expect(store.claimScheduleExecution({ scheduleId: schedule.id, scheduledWindow: "2026-08-24T09:00:00Z" }).claimed).toBe(true)
+    expect(store.claimScheduleExecution({ scheduleId: schedule.id, scheduledWindow: "2026-08-24T09:00:00Z" }).claimed).toBe(false)
     store.close()
   })
 })

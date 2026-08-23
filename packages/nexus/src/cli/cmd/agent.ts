@@ -10,7 +10,7 @@ import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
-import { AgentPlatformStore, type LearningStatus, type MemoryKind, type MemoryScope } from "../../agent-platform/store"
+import { AgentPlatformStore, type GatewayChannel, type LearningStatus, type MemoryKind, type MemoryScope } from "../../agent-platform/store"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -341,27 +341,81 @@ const AgentLearningCommand = cmd({
 })
 
 const AgentScheduleCommand = cmd({
-  command: "schedule <operation>",
+  command: "schedule <operation> [id]",
   describe: "define local schedules; new schedules remain disabled until a later explicit enable flow",
   builder: (yargs: Argv) =>
     yargs
-      .positional("operation", { choices: ["add", "list"] as const, describe: "schedule operation" })
+      .positional("operation", { choices: ["add", "list", "enable", "disable"] as const, describe: "schedule operation" })
+      .positional("id", { type: "string", describe: "schedule id for enable or disable" })
       .option("name", { type: "string", describe: "unique schedule name" })
       .option("cron", { type: "string", describe: "cron expression" })
       .option("timezone", { type: "string", default: "UTC", describe: "IANA time zone" })
-      .option("task", { type: "string", describe: "redacted task payload" }),
+      .option("task", { type: "string", describe: "redacted task payload" })
+      .option("confirm", { type: "boolean", default: false, describe: "explicitly confirm schedule activation or deactivation" }),
   async handler(args: any) {
     const store = new AgentPlatformStore()
     try {
       if (args.operation === "add") {
         if (!args.name || !args.cron || !args.task) throw new Error("Schedule requires --name, --cron, and --task")
         const schedule = store.createSchedule({ name: args.name, expression: args.cron, timezone: args.timezone, payload: args.task })
-        process.stdout.write(`Schedule ${schedule.name} created disabled. It will not run until an explicit scheduler enable flow is added.${EOL}`)
+        process.stdout.write(`Schedule ${schedule.name} created disabled. It will not run until a gateway scheduler claims it after explicit enablement.${EOL}`)
+        return
+      }
+      if (args.operation === "enable" || args.operation === "disable") {
+        if (!args.id) throw new Error("Schedule id required")
+        store.setScheduleEnabled(args.id, { enabled: args.operation === "enable", confirmed: args.confirm === true })
+        process.stdout.write(`Schedule ${args.id} ${args.operation === "enable" ? "enabled" : "disabled"}. A local CLI command does not start a hidden background scheduler.${EOL}`)
         return
       }
       const schedules = store.listSchedules()
       if (!schedules.length) process.stdout.write("No agent schedules defined" + EOL)
       for (const schedule of schedules) process.stdout.write(`${schedule.id}\t${schedule.enabled ? "enabled" : "disabled"}\t${schedule.expression}\t${schedule.timezone}\t${schedule.name}${EOL}`)
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
+const AgentGatewayCommand = cmd({
+  command: "gateway <operation> [id]",
+  describe: "register opt-in channel metadata and inspect gateway connection state; no raw bot token is accepted",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["register", "list", "enable", "disable"] as const, describe: "gateway operation" })
+      .positional("id", { type: "string", describe: "connection id for enable or disable" })
+      .option("channel", { choices: ["telegram", "discord", "slack"] as const, describe: "target chat platform" })
+      .option("label", { type: "string", describe: "connection label" })
+      .option("credential-ref", { type: "string", describe: "opaque server credential reference such as credential://telegram/personal" })
+      .option("allowed-sender", { type: "string", array: true, describe: "explicitly authorized channel sender id; repeat for each owner" })
+      .option("confirm", { type: "boolean", default: false, describe: "explicitly confirm connection enablement or disablement" }),
+  async handler(args: any) {
+    const store = new AgentPlatformStore()
+    try {
+      if (args.operation === "register") {
+        if (!args.channel || !args.label || !args.credentialRef || !(args.allowedSender as string[] | undefined)?.length) {
+          throw new Error("Gateway registration requires --channel, --label, --credential-ref, and at least one --allowed-sender")
+        }
+        const connection = store.registerGatewayConnection({
+          channel: args.channel as GatewayChannel,
+          label: args.label,
+          credentialRef: args.credentialRef,
+          allowedSenders: args.allowedSender as string[],
+        })
+        process.stdout.write(`Gateway connection ${connection.id} registered disabled for ${connection.channel}. Store the bot/app secret in the server credential store, not this command.${EOL}`)
+        return
+      }
+      if (args.operation === "enable" || args.operation === "disable") {
+        if (!args.id) throw new Error("Gateway connection id required")
+        if (!args.confirm) throw new Error("Gateway connection changes require --confirm")
+        store.setGatewayConnectionEnabled(args.id, args.operation === "enable")
+        process.stdout.write(`Gateway connection ${args.id} ${args.operation === "enable" ? "enabled" : "disabled"}.${EOL}`)
+        return
+      }
+      const connections = store.listGatewayConnections()
+      if (!connections.length) process.stdout.write("No gateway connections registered" + EOL)
+      for (const connection of connections) process.stdout.write(`${connection.id}\t${connection.channel}\t${connection.enabled ? "enabled" : "disabled"}\t${connection.label}\tallowed=${connection.allowedSenders.length}${EOL}`)
     } catch (error) {
       platformError(error)
     } finally {
@@ -405,6 +459,6 @@ const AgentRunCommand = cmd({
 export const AgentCommand = cmd({
   command: "agent",
   describe: "manage agents",
-  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentRunCommand).demandCommand(),
+  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentRunCommand).demandCommand(),
   async handler() {},
 })
