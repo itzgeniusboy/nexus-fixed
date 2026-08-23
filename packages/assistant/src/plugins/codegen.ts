@@ -290,7 +290,13 @@ async function generate(ctx: PluginContext): Promise<number | void> {
   ctx.out(`${Icon.rocket} Generating at ${outDir}`)
 
   const fs = await import("fs/promises")
-  await fs.mkdir(outDir, { recursive: true }).catch(() => {})
+  const existing = await outputDirectoryIsEmpty(outDir)
+  if (!existing.empty && ctx.flags.force !== true) {
+    ctx.err(`Refusing to overwrite non-empty directory: ${outDir}`)
+    ctx.out(`Re-run with --force only after reviewing the files that will be replaced.`)
+    return 1
+  }
+  await fs.mkdir(outDir, { recursive: true })
 
   for (const [relPath, content] of Object.entries(template_.files)) {
     const target = path.join(outDir, relPath)
@@ -300,6 +306,17 @@ async function generate(ctx: PluginContext): Promise<number | void> {
   }
 
   ctx.out(`${EOL}${Icon.success} Project created: ${Style.TEXT_SUCCESS_BOLD}${outDir}${Style.TEXT_NORMAL}`)
+}
+
+export async function outputDirectoryIsEmpty(target: string): Promise<{ empty: boolean; exists: boolean }> {
+  try {
+    const fs = await import("fs/promises")
+    const entries = await fs.readdir(target)
+    return { empty: entries.length === 0, exists: true }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { empty: true, exists: false }
+    throw error
+  }
 }
 
 function slug(input: string): string {

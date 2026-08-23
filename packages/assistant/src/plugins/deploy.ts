@@ -69,8 +69,8 @@ async function sshDeploy(ctx: PluginContext): Promise<number | void> {
     return 1
   }
 
-  if (!(await Bun.file(local).exists())) {
-    ctx.err(`Local path not found: ${local}`)
+  if (!(await isDirectory(local))) {
+    ctx.err(`Local directory not found: ${local}`)
     return 1
   }
 
@@ -143,6 +143,15 @@ async function sshDeploy(ctx: PluginContext): Promise<number | void> {
   }
 
   await healthCheck(ctx, host)
+}
+
+export async function isDirectory(target: string): Promise<boolean> {
+  try {
+    const stat = await (await import("fs/promises")).stat(target)
+    return stat.isDirectory()
+  } catch {
+    return false
+  }
 }
 
 async function healthCheck(ctx: PluginContext, host: string): Promise<void> {

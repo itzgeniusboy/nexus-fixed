@@ -4,7 +4,7 @@ import { Style, Icon } from "../core/style"
 import type { NexusPlugin, PluginContext } from "../core/types"
 
 const SNAPSHOT_DIR = path.join(os.homedir(), ".nexus", "snapshots")
-const EXCLUDES = ["node_modules", ".git", "dist", "build", ".next", "coverage", ".cache", "vendor"]
+const EXCLUDES = ["node_modules", ".git", "dist", "build", ".next", "coverage", ".cache", "vendor", ".env", ".env.*", "*.key", "*.pem", "*.crt", "*.pfx", "*.p12"]
 
 interface SnapshotMeta {
   id: string
@@ -30,11 +30,18 @@ async function gitBranch(project: string): Promise<string | undefined> {
 }
 
 async function save(ctx: PluginContext): Promise<number | void> {
-  const project = path.resolve(ctx.cwd, ctx.args[0] ?? ".")
+  const request = recoverySaveRequest(ctx.args, ctx.flags)
+  const project = path.resolve(ctx.cwd, request.project ?? ".")
   const autoName = `snapshot-${new Date().toISOString().replace(/[:.]/g, "-")}`
-  const manualName = ctx.args[1] && !ctx.args[1].startsWith("-") ? ctx.args[1] : undefined
-  const name = (typeof ctx.flags.name === "string" && ctx.flags.name) || manualName || autoName
+  const name = request.name ?? autoName
   const id = `snap-${Date.now()}`
+
+  const fs = await import("fs/promises")
+  const stat = await fs.stat(project).catch(() => undefined)
+  if (!stat?.isDirectory()) {
+    ctx.err(`Project directory not found: ${project}`)
+    return 1
+  }
 
   ctx.out(`${Icon.info} Creating snapshot of ${project}`)
   const dir = await snapshotDir()
@@ -58,6 +65,13 @@ async function save(ctx: PluginContext): Promise<number | void> {
 
   ctx.out(`${Icon.success} Snapshot saved: ${Style.TEXT_SUCCESS_BOLD}${name}${Style.TEXT_NORMAL}`)
   ctx.out(`  ${Style.TEXT_DIM}id: ${id}  size: ${(bytes / 1024 / 1024).toFixed(1)} MB${Style.TEXT_NORMAL}`)
+}
+
+export function recoverySaveRequest(args: string[], flags: Record<string, unknown>): { project?: string; name?: string } {
+  const input = args[0] === "save" ? args.slice(1) : args
+  const project = typeof flags.path === "string" && flags.path ? flags.path : undefined
+  const name = typeof flags.name === "string" && flags.name ? flags.name : input[0]
+  return { project, name }
 }
 
 async function listSnapshots(ctx: PluginContext): Promise<number | void> {
@@ -93,7 +107,8 @@ async function restore(ctx: PluginContext): Promise<number | void> {
     ctx.err(`Snapshot not found: ${id}`)
     return 1
   }
-  return unpack(ctx, id, path.dirname((await Bun.file(path.join(dir, `${id}.json`)).json()).project))
+  const meta = (await Bun.file(path.join(dir, `${id}.json`)).json()) as SnapshotMeta
+  return unpack(ctx, id, meta.project)
 }
 
 async function restoreLatest(ctx: PluginContext): Promise<number | void> {
