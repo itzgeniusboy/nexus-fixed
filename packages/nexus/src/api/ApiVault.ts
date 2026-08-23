@@ -396,13 +396,11 @@ export async function discoverProviderModels(
     const url =
       contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
     const response = await fetch(url, { headers, signal: controller.signal })
-    if (response.status === 401 || response.status === 403)
-      return { status: "invalid", models: [], code: response.status }
-    if (response.status === 429) return { status: "rate_limited", models: [], code: response.status }
-    if (!response.ok) return { status: "unknown", models: [], code: response.status }
+    const status = validationStatusForResponse(contract, response.status)
+    if (!response.ok) return { status, models: [], code: response.status }
     const models = modelNames(await response.json().catch(() => ({})))
     discoveredModelsCache.set(cacheKey, { expiresAt: Date.now() + 2 * 60 * 1000, models })
-    return { status: "active", models, code: response.status }
+    return { status, models, code: response.status }
   } catch {
     return { status: "unknown", models: [] }
   } finally {
@@ -460,15 +458,19 @@ export async function checkKey(providerInput: string, key: string): Promise<{ st
     const url =
       contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
     const response = await fetch(url, { headers, signal: controller.signal })
-    if (response.ok) return { status: "active", code: response.status }
-    if (response.status === 401 || response.status === 403) return { status: "invalid", code: response.status }
-    if (response.status === 429) return { status: "rate_limited", code: response.status }
-    return { status: "unknown", code: response.status }
+    return { status: validationStatusForResponse(contract, response.status), code: response.status }
   } catch {
     return { status: "unknown" }
   } finally {
     clearTimeout(timer)
   }
+}
+
+export function validationStatusForResponse(contract: ProviderContract, status: number): ApiKeyStatus {
+  if (status >= 200 && status < 300) return contract.modelsEndpointPublic ? "unknown" : "active"
+  if (status === 400 || status === 401 || status === 403) return "invalid"
+  if (status === 429) return "rate_limited"
+  return "unknown"
 }
 
 let cachedVaultStatus: Record<string, ApiKeyEntry> | null = null

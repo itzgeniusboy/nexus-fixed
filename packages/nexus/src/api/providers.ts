@@ -17,6 +17,8 @@ export interface ProviderContract {
   aliases?: string[]
   /** GET endpoint used for key validation and model discovery. */
   modelsEndpoint: string
+  /** True when the model listing is public and therefore cannot validate a key. */
+  modelsEndpointPublic?: boolean
   /** How the key is presented to the provider API. */
   auth: AuthStyle
   /** Extra static headers required alongside auth. */
@@ -90,6 +92,7 @@ export const PROVIDER_CONTRACTS: Record<string, ProviderContract> = {
     id: "opencode",
     label: "OpenCode Gateway",
     modelsEndpoint: "https://opencode.ai/zen/v1/models",
+    modelsEndpointPublic: true,
     auth: "bearer",
     baseURL: "https://opencode.ai/zen/v1",
     npm: "@ai-sdk/openai-compatible",
@@ -139,9 +142,9 @@ export const PROVIDER_CONTRACTS: Record<string, ProviderContract> = {
     id: "perplexity",
     label: "Perplexity",
     aliases: ["pplx"],
-    modelsEndpoint: "https://api.perplexity.ai/models",
+    modelsEndpoint: "https://api.perplexity.ai/router/v1/models",
     auth: "bearer",
-    baseURL: "https://api.perplexity.ai",
+    baseURL: "https://api.perplexity.ai/router/v1",
     npm: "@ai-sdk/perplexity",
     env: ["PERPLEXITY_API_KEY"],
   },
