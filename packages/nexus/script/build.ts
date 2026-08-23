@@ -178,7 +178,10 @@ for (const item of targets) {
     conditions: ["bun", "node"],
     tsconfig: "./tsconfig.json",
     plugins: [plugin],
-    external: ["node-gyp"],
+    // Browser automation remains optional. Assistant plugin loaders are
+    // bundled as lazy chunks, while Playwright is resolved only if a user
+    // installs it for browser WebTest/co-pilot features.
+    external: ["node-gyp", "playwright-core", "playwright-core/*", "chromium-bidi", "chromium-bidi/*"],
     format: "esm",
     minify: true,
     sourcemap: sourcemapsFlag ? "linked" : "none",

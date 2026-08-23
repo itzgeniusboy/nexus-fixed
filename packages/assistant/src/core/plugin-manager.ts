@@ -1,4 +1,3 @@
-import path from "path"
 import type { EnvironmentConfig, NexusPlugin } from "./types"
 
 interface LoadedPlugin {
@@ -6,7 +5,29 @@ interface LoadedPlugin {
   lastAccessed: number
 }
 
-const PLUGIN_DIR = path.join(import.meta.dir, "..", "plugins")
+type PluginModule = { default?: NexusPlugin; plugin?: NexusPlugin }
+
+// Bun packages literal dynamic imports into a compiled executable. Runtime
+// paths built from `import.meta.dir` are not present under /$bunfs, so retain
+// lazy loading with an explicit map of every shipped plugin.
+const pluginLoaders: Record<string, () => Promise<PluginModule>> = {
+  bg: () => import("../plugins/bg"),
+  codegen: () => import("../plugins/codegen"),
+  copilot: () => import("../plugins/copilot"),
+  cpanel: () => import("../plugins/cpanel"),
+  daemon: () => import("../plugins/daemon"),
+  deploy: () => import("../plugins/deploy"),
+  devtools: () => import("../plugins/devtools"),
+  gitpro: () => import("../plugins/gitpro"),
+  integrations: () => import("../plugins/integrations"),
+  recovery: () => import("../plugins/recovery"),
+  security: () => import("../plugins/security"),
+  termux: () => import("../plugins/termux"),
+  translator: () => import("../plugins/translator"),
+  voice: () => import("../plugins/voice"),
+  webtest: () => import("../plugins/webtest"),
+  workspace: () => import("../plugins/workspace"),
+}
 
 export class PluginManager {
   private loaded = new Map<string, LoadedPlugin>()
@@ -16,24 +37,7 @@ export class PluginManager {
   constructor(private config: EnvironmentConfig) {}
 
   available(): string[] {
-    return [
-      "codegen",
-      "devtools",
-      "recovery",
-      "workspace",
-      "termux",
-      "translator",
-      "gitpro",
-      "cpanel",
-      "deploy",
-      "webtest",
-      "copilot",
-      "integrations",
-      "voice",
-      "bg",
-      "security",
-      "daemon",
-    ]
+    return Object.keys(pluginLoaders)
   }
 
   isDisabled(name: string): boolean {
@@ -72,8 +76,10 @@ export class PluginManager {
       await this.unloadLRU()
     }
 
-    const mod = await import(path.join(PLUGIN_DIR, `${name}.ts`))
-    const plugin: NexusPlugin = mod.default ?? mod.plugin
+    const loader = pluginLoaders[name]
+    if (!loader) throw new Error(`Unknown plugin: ${name}`)
+    const mod = await loader()
+    const plugin = mod.default ?? mod.plugin
 
     if (!plugin?.name || !Array.isArray(plugin.commands)) {
       throw new Error(`Plugin '${name}' has an invalid shape`)

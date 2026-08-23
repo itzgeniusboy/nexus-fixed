@@ -38,6 +38,7 @@ const FLAG_OPTIONS = [
   ["connectExisting", { type: "boolean", describe: "attach only to a user-started loopback CDP browser" }],
   ["authorizeTarget", { type: "boolean", describe: "confirm ownership or authorization for a browser/HTTP target" }],
   ["allowInteraction", { type: "boolean", describe: "allow one human-confirmed non-sensitive browser interaction" }],
+  ["voiceCommand", { type: "string", describe: "one-shot voice command text" }],
   ["task", { type: "string", describe: "task description" }],
 ] as const
 

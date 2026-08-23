@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
 import { UserLiaison } from "@nexus/termux-core"
-import { isBareUserTask, runBareUserTask } from "./quick-liaison"
+import { isBareUserTask, routeAssistantPluginArgs, runBareUserTask } from "./quick-liaison"
 
 const GIB = 1024 * 1024 * 1024
 
@@ -16,6 +16,14 @@ test("routes plain task input through the immediate liaison path", () => {
   assert.equal(isBareUserTask(["big task"]), true)
   assert.equal(isBareUserTask(["setup", "termux"]), false)
   assert.equal(isBareUserTask(["--help"]), false)
+})
+
+test("routes documented Assistant plugin aliases before bare-task handling", () => {
+  assert.deepEqual(routeAssistantPluginArgs(["voice", "say"]), ["assistant", "voice", "say"])
+  assert.deepEqual(routeAssistantPluginArgs(["webtest", "run", "https://example.test"]), ["assistant", "webtest", "run", "https://example.test"])
+  assert.deepEqual(routeAssistantPluginArgs(["assistant", "voice", "say"]), ["assistant", "voice", "say"])
+  assert.equal(isBareUserTask(routeAssistantPluginArgs(["voice", "say"])), false)
+  assert.equal(isBareUserTask(routeAssistantPluginArgs(["custom task"])), true)
 })
 
 test("bare task acknowledgements expose simulated desktop High and Termux Low capacity plans", async () => {

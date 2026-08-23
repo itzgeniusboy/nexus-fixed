@@ -49,8 +49,8 @@ function readLine(): Promise<string> {
 async function oneShot(ctx: PluginContext): Promise<number | void> {
   let command = ctx.args.join(" ")
 
-  if (typeof ctx.flags.command === "string" && ctx.flags.command) {
-    command = ctx.flags.command
+  if (typeof ctx.flags.voiceCommand === "string" && ctx.flags.voiceCommand) {
+    command = ctx.flags.voiceCommand
   } else if (command.length === 0 && process.env.TERMUX_VERSION) {
     const proc = Bun.spawn(["termux-speech-to-text"], { stdout: "pipe", stderr: "inherit" })
     await proc.exited

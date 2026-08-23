@@ -1,9 +1,22 @@
 import { EOL } from "node:os"
 import type { UserLiaison } from "@nexus/termux-core"
 
-const knownCommands = new Set([
-  "acp", "agent", "api", "asset", "attach", "bot", "completion", "config", "console", "db", "debug", "dev", "do", "export", "generate", "github", "import", "liaison", "mcp", "mod", "models", "pr", "providers", "run", "serve", "session", "setup", "stats", "tui", "uninstall", "upgrade", "web",
+const assistantPluginAliases = new Set([
+  "code", "codegen", "copilot", "cpanel", "deploy", "devtools", "gitpro", "integrations", "recovery", "security", "termux", "translate", "translator", "undo-ai", "voice", "webtest", "workspace",
 ])
+
+const knownCommands = new Set([
+  "acp", "agent", "api", "asset", "assistant", "attach", "bot", "completion", "config", "console", "db", "debug", "dev", "do", "export", "generate", "github", "import", "liaison", "mcp", "mod", "models", "pr", "providers", "run", "serve", "session", "setup", "stats", "tui", "uninstall", "upgrade", "web", ...assistantPluginAliases,
+])
+
+/**
+ * Keep direct plugin commands documented by the Assistant package out of the
+ * bare-task liaison. This preserves existing natural-language bare tasks while
+ * making `nexus voice say` equivalent to `nexus assistant voice say`.
+ */
+export function routeAssistantPluginArgs(args: string[]) {
+  return assistantPluginAliases.has(args[0] ?? "") ? ["assistant", ...args] : args
+}
 
 export function isBareUserTask(args: string[]) {
   return args.length > 0 && !args[0]?.startsWith("-") && !knownCommands.has(args[0] ?? "")
