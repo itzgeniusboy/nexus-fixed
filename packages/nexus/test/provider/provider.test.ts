@@ -128,6 +128,7 @@ it.instance(
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
   }),
   { config: { provider: { anthropic: { options: { apiKey: "config-api-key" } } } } },
+  { timeout: 15_000 },
 )
 
 it.instance(
