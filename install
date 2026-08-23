@@ -1,6 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# NEXUS: Termux pe dedicated installer hand-off
+if [ -n "${TERMUX_VERSION-}" ] || case "${PREFIX-}" in *com.termux*) true ;; *) false ;; esac; then
+    HERE="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
+    if [ -n "$HERE" ] && [ -f "$HERE/install-termux.sh" ]; then
+        exec bash "$HERE/install-termux.sh" "$@"
+    fi
+    curl -fsSL "${NEXUS_TERMUX_INSTALL_URL:-https://raw.githubusercontent.com/itzgeniusboy/nexus/main/install-termux.sh}" | bash -s -- "$@"
+    exit $?
+fi
+
 APP=nexus
 REPO=itzgeniusboy/nexus
 INSTALL_DIR="${NEXUS_INSTALL_DIR:-$HOME/.nexus/bin}"

@@ -110,7 +110,24 @@ export class RotationEngine {
   }
 }
 
-export const PROVIDER_FALLBACK_ORDER = ["groq", "openrouter", "google", "ollama", "opencode", "openai"] as const
+export const PROVIDER_FALLBACK_ORDER = [
+  "groq",
+  "openrouter",
+  "google",
+  "ollama",
+  "opencode",
+  "openai",
+  "anthropic",
+  "xai",
+  "mistral",
+  "deepseek",
+  "cerebras",
+  "togetherai",
+  "fireworks",
+  "moonshotai",
+  "cohere",
+  "perplexity",
+] as const
 
 /** Canonical low-cost/free model order used by setup, default selection, and model tests. */
 export const PREFERRED_MODELS = {
@@ -123,6 +140,17 @@ export const PREFERRED_MODELS = {
   ],
   // Use current text-generation models only. Never use TTS/image/audio models here.
   google: ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash"],
+  deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  cerebras: ["llama3.3-70b", "llama3.1-8b"],
+  opencode: ["grok-code-fast-1"],
+  anthropic: ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-5-haiku-latest"],
+  xai: ["grok-4", "grok-code-fast-1", "grok-3-mini"],
+  mistral: ["mistral-large-latest", "mistral-small-latest"],
+  togetherai: ["meta-llama/Llama-3.3-70B-Instruct-Turbo", "Qwen/Qwen2.5-72B-Instruct-Turbo"],
+  perplexity: ["sonar-pro", "sonar"],
+  cohere: ["command-a-03-2025", "command-r-plus-08-2024"],
+  fireworks: ["accounts/fireworks/models/llama-v3p3-70b-instruct"],
+  moonshotai: ["kimi-k2-0711-preview", "moonshot-v1-8k"],
 } as const
 
 export type PreferredProvider = keyof typeof PREFERRED_MODELS
@@ -190,7 +218,24 @@ export function normalizeProviderKeyName(key: string): string | undefined {
   const normalized = key.trim().toUpperCase()
   if (!normalized.endsWith("_API_KEY")) return undefined
   const provider = normalized.slice(0, -"_API_KEY".length).toLowerCase()
-  if (!["groq", "openrouter", "gemini", "google", "openai"].includes(provider)) return undefined
+  const known = [
+    "groq",
+    "openrouter",
+    "gemini",
+    "google",
+    "openai",
+    "anthropic",
+    "xai",
+    "mistral",
+    "deepseek",
+    "cerebras",
+    "togetherai",
+    "perplexity",
+    "cohere",
+    "fireworks",
+    "moonshotai",
+  ]
+  if (!known.includes(provider)) return undefined
   return provider === "gemini" ? "google" : provider
 }
 

@@ -1,17 +1,13 @@
 import fs from "fs"
 import os from "os"
 import path from "path"
+import { PROVIDER_CONTRACTS, REGISTRY_PROVIDER_IDS, contractFor, type ProviderContract } from "./providers"
 
-export const API_PROVIDERS = [
-  "groq",
-  "openrouter",
-  "deepseek",
-  "gemini",
-  "google",
-  "cerebras",
-  "openai",
-  "opencode",
-] as const
+export const API_PROVIDERS = REGISTRY_PROVIDER_IDS
+
+const PROVIDER_ALIASES: Record<string, string> = Object.fromEntries(
+  Object.values(PROVIDER_CONTRACTS).flatMap((contract) => (contract.aliases ?? []).map((alias) => [alias, contract.id])),
+)
 export type ApiProvider = (typeof API_PROVIDERS)[number]
 export type ApiKeyStatus = "active" | "rate_limited" | "invalid" | "suspended" | "unknown"
 
@@ -145,7 +141,8 @@ export function saveUsage(usage: Record<string, ProviderUsage>): void {
 }
 
 export function normalizeProvider(provider: string): ApiProvider | undefined {
-  const normalized = provider.trim().toLowerCase()
+  const raw = provider.trim().toLowerCase().replace(/[\s_]+/g, "-")
+  const normalized = PROVIDER_ALIASES[raw] ?? raw
   if (normalized === "google") return "gemini"
   return (API_PROVIDERS as readonly string[]).includes(normalized) ? (normalized as ApiProvider) : undefined
 }
@@ -387,25 +384,23 @@ export async function discoverProviderModels(
   key: string,
 ): Promise<{ status: ApiKeyStatus; models: string[]; code?: number }> {
   const provider = normalizeProvider(providerInput)
-  const endpoint = endpointFor(providerInput)
-  if (!provider || !endpoint) return { status: "unknown", models: [] }
+  const contract = contractFor(providerInput)
+  if (!provider || !contract) return { status: "unknown", models: [] }
   const cacheKey = `${provider}:${key}`
   const cached = discoveredModelsCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return { status: "active", models: cached.models }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    const headers: Record<string, string> = { Authorization: `Bearer ${key}` }
-    const url = provider === "gemini" ? `${endpoint}?key=${encodeURIComponent(key)}` : endpoint
-    if (provider === "gemini") delete headers.Authorization
+    const headers = authHeadersFor(contract, key)
+    const url =
+      contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
     const response = await fetch(url, { headers, signal: controller.signal })
-    if (response.status === 401 || response.status === 403)
-      return { status: "invalid", models: [], code: response.status }
-    if (response.status === 429) return { status: "rate_limited", models: [], code: response.status }
-    if (!response.ok) return { status: "unknown", models: [], code: response.status }
+    const status = validationStatusForResponse(contract, response.status)
+    if (!response.ok) return { status, models: [], code: response.status }
     const models = modelNames(await response.json().catch(() => ({})))
     discoveredModelsCache.set(cacheKey, { expiresAt: Date.now() + 2 * 60 * 1000, models })
-    return { status: "active", models, code: response.status }
+    return { status, models, code: response.status }
   } catch {
     return { status: "unknown", models: [] }
   } finally {
@@ -443,38 +438,39 @@ export function apiVaultHasKeys(providerInput?: string): boolean {
 }
 
 function endpointFor(providerInput: string): string | undefined {
-  const provider = normalizeProvider(providerInput)
-  if (!provider) return undefined
-  if (provider === "groq") return "https://api.groq.com/openai/v1/models"
-  if (provider === "openrouter") return "https://openrouter.ai/api/v1/models"
-  if (provider === "deepseek") return "https://api.deepseek.com/models"
-  if (provider === "gemini") return "https://generativelanguage.googleapis.com/v1beta/models"
-  if (provider === "cerebras") return "https://api.cerebras.ai/v1/models"
-  if (provider === "openai") return "https://api.openai.com/v1/models"
-  if (provider === "opencode") return "https://opencode.ai/zen/v1/models"
-  return undefined
+  return contractFor(providerInput)?.modelsEndpoint
+}
+
+function authHeadersFor(contract: ProviderContract, key: string): Record<string, string> {
+  if (contract.auth === "query") return {}
+  if (contract.auth === "x-api-key") return { "x-api-key": key, ...(contract.headers ?? {}) }
+  return { Authorization: `Bearer ${key}`, ...(contract.headers ?? {}) }
 }
 
 export async function checkKey(providerInput: string, key: string): Promise<{ status: ApiKeyStatus; code?: number }> {
   const provider = normalizeProvider(providerInput)
-  const endpoint = endpointFor(providerInput)
-  if (!provider || !endpoint) return { status: "unknown" }
+  const contract = contractFor(providerInput)
+  if (!provider || !contract) return { status: "unknown" }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
-    const headers: Record<string, string> = { Authorization: `Bearer ${key}` }
-    const url = provider === "gemini" ? `${endpoint}?key=${encodeURIComponent(key)}` : endpoint
-    if (provider === "gemini") delete headers.Authorization
+    const headers = authHeadersFor(contract, key)
+    const url =
+      contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
     const response = await fetch(url, { headers, signal: controller.signal })
-    if (response.ok) return { status: "active", code: response.status }
-    if (response.status === 401 || response.status === 403) return { status: "invalid", code: response.status }
-    if (response.status === 429) return { status: "rate_limited", code: response.status }
-    return { status: "unknown", code: response.status }
+    return { status: validationStatusForResponse(contract, response.status), code: response.status }
   } catch {
     return { status: "unknown" }
   } finally {
     clearTimeout(timer)
   }
+}
+
+export function validationStatusForResponse(contract: ProviderContract, status: number): ApiKeyStatus {
+  if (status >= 200 && status < 300) return contract.modelsEndpointPublic ? "unknown" : "active"
+  if (status === 400 || status === 401 || status === 403) return "invalid"
+  if (status === 429) return "rate_limited"
+  return "unknown"
 }
 
 let cachedVaultStatus: Record<string, ApiKeyEntry> | null = null
@@ -557,3 +553,7 @@ export function resetApiVaultForTests(): void {
 }
 
 export { emptyVault }
+
+export function resolveProviderLabel(provider: string): string {
+  return contractFor(provider)?.label ?? provider
+}

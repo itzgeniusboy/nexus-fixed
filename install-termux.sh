@@ -53,6 +53,52 @@ case ":$PATH:" in
   *) printf '\n%s\n' '# NEXUS Termux' >> "$HOME/.bashrc"; printf '%s\n' 'export PATH="$HOME/bin:$PATH"' >> "$HOME/.bashrc" ;;
 esac
 
+
+step 'Installing NEXUS binary' '6/6'
+NEXUS_BIN="$HOME/.nexus/bin/nexus.bin"
+mkdir -p "$HOME/.nexus/bin"
+if [ ! -x "$NEXUS_BIN" ]; then
+  TAG=$(curl -fsSL --retry 2 "https://api.github.com/repos/itzgeniusboy/nexus/releases/latest" 2>/dev/null | grep -o '"tag_name": *"[^"]*"' | head -1 | cut -d'"' -f4)
+  [ -n "$TAG" ] || TAG="v0.1.54"
+  VER="${TAG#v}"
+  for name in "nexus-linux-${ARCH_LABEL}-${VER}.tar.gz" "nexus-linux-${ARCH_LABEL}.tar.gz"; do
+    URL="https://github.com/itzgeniusboy/nexus/releases/download/${TAG}/${name}"
+    printf '[%s] Trying %s\n' "$CURRENT_STEP" "$name"
+    curl -fsL --retry 2 -o "$HOME/.nexus/bin/dl.tar.gz" "$URL" && { tar -xzf "$HOME/.nexus/bin/dl.tar.gz" -C "$HOME/.nexus/bin"; rm -f "$HOME/.nexus/bin/dl.tar.gz"; break; }
+  done
+  BIN=$(find "$HOME/.nexus/bin" -maxdepth 1 -type f \( -name nexus -o -name 'nexus-*' \) ! -name '*.tar.gz' | head -1)
+  [ -n "$BIN" ] && mv -f "$BIN" "$NEXUS_BIN" && chmod 755 "$NEXUS_BIN"
+fi
+
+if [ -x "$NEXUS_BIN" ]; then
+  if "$NEXUS_BIN" --version >/dev/null 2>&1; then
+    ln -sf "$NEXUS_BIN" "$HOME/bin/nexus"
+    printf '%s\n' 'NEXUS binary installed (native).'
+  else
+    printf '%s\n' 'Binary needs glibc runtime — installing glibc-runner'
+    pkg install -y glibc-runner patchelf || true
+    if command -v grun >/dev/null 2>&1; then
+      printf '#!/data/data/com.termux/files/usr/bin/bash\nexec grun $HOME/.nexus/bin/nexus.bin "$@"\n' > "$HOME/bin/nexus"
+      chmod 755 "$HOME/bin/nexus"
+      printf '%s\n' 'NEXUS binary installed (glibc-runner wrapped).'
+    else
+      ln -sf "$NEXUS_BIN" "$HOME/bin/nexus"
+      printf '%s\n' 'glibc-runner unavailable — linked directly, may not run.'
+    fi
+  fi
+else
+  printf '%s\n' 'Binary download failed — source mode: git clone https://github.com/itzgeniusboy/nexus'
+fi
+
+hash -r
+
+if [ "${NEXUS_LAUNCH:-1}" = "1" ] && command -v nexus >/dev/null 2>&1; then
+  printf '%s\n' 'Launching NEXUS ...'
+  sleep 1
+  termux-wake-lock 2>/dev/null || true
+  exec nexus
+fi
+
 printf '%s\n' '======================================================='
 printf '%s\n' 'NEXUS Termux foundation installed.'
 printf '%s\n' "Architecture: $ARCH_LABEL"

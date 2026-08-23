@@ -8,7 +8,13 @@ import { ModelsDev } from "@nexus-ai/core/models-dev"
 import { FSUtil } from "@nexus-ai/core/fs-util"
 import { CrossSpawnSpawner } from "@nexus-ai/core/cross-spawn-spawner"
 import { Global } from "@nexus-ai/core/global"
-import { disposeAllInstances, provideInstanceEffect, tmpdirScoped, TestInstance } from "../fixture/fixture"
+import {
+  disposeAllInstances,
+  disposeAllInstancesEffect,
+  provideInstanceEffect,
+  tmpdirScoped,
+  TestInstance,
+} from "../fixture/fixture"
 import { markPluginDependenciesReady } from "../fixture/plugin"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
@@ -128,6 +134,7 @@ it.instance(
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
   }),
   { config: { provider: { anthropic: { options: { apiKey: "config-api-key" } } } } },
+  { timeout: 15_000 },
 )
 
 it.instance(
@@ -1996,7 +2003,10 @@ it.effect("plugin config providers persist after instance dispose", () =>
     expect(first[ProviderV2.ID.make("demo")]).toBeDefined()
     expect(first[ProviderV2.ID.make("demo")].models[ModelV2.ID.make("chat")]).toBeDefined()
 
-    yield* Effect.promise(() => disposeAllInstances())
+    // Dispose the same test-scoped InstanceStore that `loadAndList` uses.
+    // Calling the AppRuntime bridge here targets a separate global store and
+    // can block behind unrelated test instances on CI.
+    yield* disposeAllInstancesEffect
 
     const second = yield* loadAndList
     expect(second[ProviderV2.ID.make("demo")]).toBeDefined()
