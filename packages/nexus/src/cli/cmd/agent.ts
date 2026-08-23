@@ -10,6 +10,7 @@ import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
+import { AgentPlatformStore, type LearningStatus, type MemoryKind, type MemoryScope } from "../../agent-platform/store"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -251,9 +252,159 @@ const AgentListCommand = effectCmd({
   }),
 })
 
+function platformError(error: unknown) {
+  process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}${EOL}`)
+  process.exitCode = 1
+}
+
+const AgentMemoryCommand = cmd({
+  command: "memory <operation> [query..]",
+  describe: "manage local, redacted, cross-session agent memory",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["add", "list", "search"] as const, describe: "memory operation" })
+      .positional("query", { type: "string", array: true, describe: "search text" })
+      .option("content", { type: "string", describe: "memory text for add" })
+      .option("scope", { choices: ["device", "project", "channel"] as const, default: "device", describe: "memory visibility scope" })
+      .option("scope-id", { type: "string", default: "default", describe: "scope identifier" })
+      .option("kind", { choices: ["fact", "preference", "decision", "summary", "instruction"] as const, default: "fact", describe: "memory classification" })
+      .option("confidence", { type: "number", default: 0.8, describe: "confidence from 0 to 1" }),
+  async handler(args: any) {
+    const store = new AgentPlatformStore()
+    try {
+      const scope = args.scope as MemoryScope
+      const scopeId = args.scopeId as string
+      if (args.operation === "add") {
+        if (!args.content) throw new Error("Memory content required. Use: nexus agent memory add --content \"...\"")
+        const memory = store.addMemory({ scope, scopeId, kind: args.kind as MemoryKind, content: args.content, confidence: args.confidence })
+        process.stdout.write(`Saved redacted ${memory.kind} memory ${memory.id} in ${memory.scope}:${memory.scopeId}${EOL}`)
+        return
+      }
+      const memories = args.operation === "search"
+        ? store.searchMemory((args.query ?? []).join(" "), scope, scopeId)
+        : store.listMemory(scope, scopeId)
+      if (!memories.length) {
+        process.stdout.write(`No active memory in ${scope}:${scopeId}${EOL}`)
+        return
+      }
+      for (const memory of memories) process.stdout.write(`${memory.id}\t${memory.kind}\t${memory.confidence}\t${memory.content}${EOL}`)
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
+const AgentLearningCommand = cmd({
+  command: "learning <operation> [id]",
+  describe: "review and approve reusable learning proposals; no proposal activates automatically",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["propose", "list", "approve", "reject"] as const, describe: "learning operation" })
+      .positional("id", { type: "string", describe: "proposal id for approve or reject" })
+      .option("run", { type: "string", describe: "source run id for a proposal" })
+      .option("title", { type: "string", describe: "proposal title" })
+      .option("summary", { type: "string", describe: "proposal summary" })
+      .option("skill", { type: "string", describe: "draft reusable skill text" })
+      .option("status", { choices: ["proposed", "approved", "rejected", "superseded"] as const, describe: "optional list filter" }),
+  async handler(args: any) {
+    const store = new AgentPlatformStore()
+    try {
+      if (args.operation === "propose") {
+        if (!args.run || !args.title || !args.skill) throw new Error("Proposal requires --run, --title, and --skill")
+        const proposal = store.proposeLearning({ runId: args.run, title: args.title, summary: args.summary ?? "", skillDraft: args.skill })
+        process.stdout.write(`Learning proposal ${proposal.id} saved as proposed. Review with: nexus agent learning approve ${proposal.id}${EOL}`)
+        return
+      }
+      if (args.operation === "approve") {
+        if (!args.id) throw new Error("Proposal id required")
+        store.approveLearning(args.id)
+        process.stdout.write(`Learning proposal ${args.id} approved and revisioned${EOL}`)
+        return
+      }
+      if (args.operation === "reject") {
+        if (!args.id) throw new Error("Proposal id required")
+        store.rejectLearning(args.id)
+        process.stdout.write(`Learning proposal ${args.id} rejected${EOL}`)
+        return
+      }
+      const proposals = store.listLearning(args.status as LearningStatus | undefined)
+      if (!proposals.length) process.stdout.write("No learning proposals found" + EOL)
+      for (const proposal of proposals) process.stdout.write(`${proposal.id}\t${proposal.status}\t${proposal.title}\t${proposal.summary}${EOL}`)
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
+const AgentScheduleCommand = cmd({
+  command: "schedule <operation>",
+  describe: "define local schedules; new schedules remain disabled until a later explicit enable flow",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["add", "list"] as const, describe: "schedule operation" })
+      .option("name", { type: "string", describe: "unique schedule name" })
+      .option("cron", { type: "string", describe: "cron expression" })
+      .option("timezone", { type: "string", default: "UTC", describe: "IANA time zone" })
+      .option("task", { type: "string", describe: "redacted task payload" }),
+  async handler(args: any) {
+    const store = new AgentPlatformStore()
+    try {
+      if (args.operation === "add") {
+        if (!args.name || !args.cron || !args.task) throw new Error("Schedule requires --name, --cron, and --task")
+        const schedule = store.createSchedule({ name: args.name, expression: args.cron, timezone: args.timezone, payload: args.task })
+        process.stdout.write(`Schedule ${schedule.name} created disabled. It will not run until an explicit scheduler enable flow is added.${EOL}`)
+        return
+      }
+      const schedules = store.listSchedules()
+      if (!schedules.length) process.stdout.write("No agent schedules defined" + EOL)
+      for (const schedule of schedules) process.stdout.write(`${schedule.id}\t${schedule.enabled ? "enabled" : "disabled"}\t${schedule.expression}\t${schedule.timezone}\t${schedule.name}${EOL}`)
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
+const AgentRunCommand = cmd({
+  command: "run <operation>",
+  describe: "plan bounded local subagent work; planning does not start hidden background execution",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["plan", "list"] as const, describe: "run operation" })
+      .option("children", { type: "number", default: 2, describe: "maximum child agents, from 0 to 12" })
+      .option("parallel", { type: "number", default: 3, describe: "maximum total parallel agents, from 1 to 12" })
+      .option("budget", { choices: ["low", "standard", "high"] as const, default: "standard", describe: "execution budget class" })
+      .option("idempotency-key", { type: "string", describe: "optional replay-safe planning key" }),
+  async handler(args: any) {
+    const store = new AgentPlatformStore()
+    try {
+      if (args.operation === "plan") {
+        const run = store.createRun({
+          idempotencyKey: args.idempotencyKey,
+          policy: { maxChildren: args.children, maxParallel: args.parallel, budgetClass: args.budget },
+        })
+        process.stdout.write(`Planned local run ${run.id}: lead + up to ${run.policy.maxChildren} children, max ${run.policy.maxParallel} parallel. No background work started.${EOL}`)
+        return
+      }
+      const runs = store.listRuns()
+      if (!runs.length) process.stdout.write("No durable agent runs planned" + EOL)
+      for (const run of runs) process.stdout.write(`${run.id}\t${run.status}\t${run.policy.budgetClass}\tchildren=${run.policy.maxChildren}\tparallel=${run.policy.maxParallel}${EOL}`)
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
 export const AgentCommand = cmd({
   command: "agent",
   describe: "manage agents",
-  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).demandCommand(),
+  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentRunCommand).demandCommand(),
   async handler() {},
 })
