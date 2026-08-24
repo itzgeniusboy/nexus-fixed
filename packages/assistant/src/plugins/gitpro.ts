@@ -27,7 +27,25 @@ async function diff(cwd: string, staged: boolean): Promise<string> {
   return exit !== 0 ? "" : await new Response(proc.stdout).text()
 }
 
-function review(diffText: string): ReviewFinding[] {
+function summarizeDiff(diffText: string) {
+  const files = [...new Set([...diffText.matchAll(/^diff --git a\/(\S+)/gm)].map((match) => match[1]))]
+  const additions = (diffText.match(/^\+(?!\+\+)/gm) ?? []).length
+  const deletions = (diffText.match(/^-(?!-)/gm) ?? []).length
+  return { files, additions, deletions }
+}
+
+function showPlan(ctx: PluginContext, diffText: string) {
+  const summary = summarizeDiff(diffText)
+  ctx.out(`${Icon.info} Review plan: ${summary.files.length} file(s), +${summary.additions}/-${summary.deletions}`)
+  for (const file of summary.files.slice(0, 12)) ctx.out(`  ${Style.TEXT_DIM}• ${file}${Style.TEXT_NORMAL}`)
+  if (summary.files.length > 12) ctx.out(`  ${Style.TEXT_DIM}… and ${summary.files.length - 12} more file(s)${Style.TEXT_NORMAL}`)
+  if (ctx.flags.patch === true) {
+    const preview = diffText.slice(0, 12_000)
+    ctx.out(`${Style.TEXT_DIM}Patch preview (bounded):${Style.TEXT_NORMAL}\n${preview}${diffText.length > preview.length ? "\n… preview truncated" : ""}`)
+  }
+}
+
+export function review(diffText: string): ReviewFinding[] {
   const findings: ReviewFinding[] = []
   let currentFile = ""
   let currentLine = 0
@@ -66,6 +84,13 @@ async function untrackedFiles(cwd: string): Promise<string[]> {
   return (await new Response(proc.stdout).text()).split("\n").filter(Boolean)
 }
 
+async function changedFiles(cwd: string): Promise<string[]> {
+  const proc = Bun.spawn(["git", "diff", "--name-only", "HEAD"], { cwd, stdout: "pipe", stderr: "ignore" })
+  if ((await proc.exited) !== 0) return await untrackedFiles(cwd)
+  const tracked = (await new Response(proc.stdout).text()).split("\n").filter(Boolean)
+  return [...new Set([...tracked, ...(await untrackedFiles(cwd))])]
+}
+
 function scanPlainFile(file: string, content: string): ReviewFinding[] {
   const findings: ReviewFinding[] = []
   for (const [index, text] of content.split("\n").entries()) {
@@ -82,6 +107,15 @@ function scanPlainFile(file: string, content: string): ReviewFinding[] {
   return findings
 }
 
+async function scanChangedFiles(cwd: string) {
+  const findings: ReviewFinding[] = []
+  for (const file of await changedFiles(cwd)) {
+    const content = await Bun.file(path.join(cwd, file)).text().catch(() => "")
+    if (content) findings.push(...scanPlainFile(file, content))
+  }
+  return findings
+}
+
 async function commit(ctx: PluginContext): Promise<number | void> {
   const cwd = path.resolve(ctx.cwd, ctx.args.find((a) => !a.startsWith("-") && !ctx.flags.message) ?? ".")
   const gitDir = Bun.spawn(["git", "rev-parse", "--is-inside-work-tree"], { cwd, stdout: "pipe", stderr: "ignore" })
@@ -90,9 +124,9 @@ async function commit(ctx: PluginContext): Promise<number | void> {
     return 1
   }
 
-  const staged = await diff(cwd, true)
-  const unstaged = staged.length === 0 ? await diff(cwd, false) : staged
-  const diffText = staged || unstaged
+  let staged = await diff(cwd, true)
+  const unstaged = staged.length === 0 ? await diff(cwd, false) : ""
+  let diffText = staged || unstaged
 
   if (!diffText.trim()) {
     ctx.out(`${Icon.warn} No changes to review`)
@@ -100,7 +134,7 @@ async function commit(ctx: PluginContext): Promise<number | void> {
   }
 
   ctx.out(`${Icon.brain} NEXUS Smart Commit — reviewing ${diffText.split("\n").length} diff lines`)
-  const findings = review(diffText)
+  let findings = [...review(diffText), ...(await scanChangedFiles(cwd))]
 
   if (findings.length > 0) {
     for (const finding of findings) {
@@ -113,19 +147,13 @@ async function commit(ctx: PluginContext): Promise<number | void> {
       ctx.out(`  ${Icon.warn} ${color}${finding.file}:${finding.line}${Style.TEXT_NORMAL} ${finding.message}`)
     }
 
-    const hasCritical = findings.some((f) => f.severity === "critical")
-    if (hasCritical && !ctx.flags.noVerify) {
-      const proceed = await ctx.confirm({
-        title: "Critical findings detected — commit anyway?",
-        detail: "Secrets in commits are extremely hard to revoke safely",
-        danger: true,
-      })
-      if (!proceed) {
-        ctx.out("Commit cancelled — fix the issues and retry")
-        return 1
-      }
+    if (findings.some((f) => f.severity === "critical")) {
+      ctx.err("Commit blocked: remove or rotate critical secret material before retrying. --no-verify cannot bypass this safety gate.")
+      return 1
     }
   }
+
+  showPlan(ctx, diffText)
 
   const message = typeof ctx.flags.message === "string"
     ? ctx.flags.message
@@ -142,8 +170,41 @@ async function commit(ctx: PluginContext): Promise<number | void> {
   }
 
   if (staged.length === 0) {
+    if (ctx.flags.stage !== true) {
+      ctx.out(`${Icon.warn} No staged changes were committed. Review the plan above, stage the intended files yourself, or rerun with --stage to ask NEXUS to stage the reviewed working tree.`)
+      return 1
+    }
+    const approveStaging = await ctx.confirm({
+      title: "Stage the reviewed working tree?",
+      detail: "NEXUS will run git add -A locally. It will not commit until a second confirmation.",
+      danger: false,
+    })
+    if (!approveStaging) {
+      ctx.out("Staging cancelled")
+      return 1
+    }
     const add = Bun.spawn(["git", "add", "-A"], { cwd, stdout: "inherit", stderr: "inherit" })
-    await add.exited
+    if ((await add.exited) !== 0) {
+      ctx.err("git add failed")
+      return 1
+    }
+    staged = await diff(cwd, true)
+    diffText = staged
+    const stagedFindings = [...review(diffText), ...(await scanChangedFiles(cwd))]
+    if (stagedFindings.some((finding) => finding.severity === "critical")) {
+      ctx.err("Commit blocked: critical secret material appeared after staging. Unstage or remove it before retrying.")
+      return 1
+    }
+  }
+
+  const approveCommit = await ctx.confirm({
+    title: "Create this Git commit?",
+    detail: `Commit ${summarizeDiff(diffText).files.length} reviewed file(s) with: ${message.split("\n")[0]}`,
+    danger: false,
+  })
+  if (!approveCommit) {
+    ctx.out("Commit cancelled")
+    return 1
   }
 
   const proc = Bun.spawn(["git", "commit", "-m", message], { cwd, stdout: "pipe", stderr: "pipe" })
@@ -248,9 +309,29 @@ const plugin: NexusPlugin = {
       },
     },
     {
+      name: "plan",
+      describe: "summarize a reviewable local diff without staging or committing",
+      usage: "nexus gitpro plan [--patch]",
+      run: async (ctx) => {
+        const cwd = path.resolve(ctx.cwd, ctx.args.find((arg) => !arg.startsWith("-")) ?? ".")
+        const diffText = (await diff(cwd, true)) || await diff(cwd, false)
+        if (!diffText.trim()) {
+          ctx.out(`${Icon.warn} No staged or tracked working-tree changes to plan`)
+          return 0
+        }
+        const findings = review(diffText)
+        if (findings.some((finding) => finding.severity === "critical")) {
+          ctx.err("Patch preview withheld because critical secret material was detected. Run nexus gitpro review and remove it first.")
+          return 1
+        }
+        showPlan(ctx, diffText)
+        return 0
+      },
+    },
+    {
       name: "commit",
-      describe: "review + generate message + commit in one step",
-      usage: 'nexus gitpro commit [-m "message"] [--no-verify] [--dry-run]',
+      describe: "review + propose message; staging and commit each require explicit confirmation",
+      usage: 'nexus gitpro commit [-m "message"] [--stage] [--confirm] [--dry-run] [--patch]',
       run: commit,
     },
     {

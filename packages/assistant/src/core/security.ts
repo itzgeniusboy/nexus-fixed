@@ -82,28 +82,44 @@ export async function confirmViaStdin(request: HitlRequest): Promise<boolean> {
   return answer.trim().toLowerCase() === "y" || answer.trim().toLowerCase() === "yes"
 }
 
-function readLine(): Promise<string> {
-  return new Promise((resolve) => {
-    let input = ""
-    const stdin = process.stdin
-    stdin.setEncoding("utf8")
-    stdin.resume()
-    const onData = (chunk: string) => {
-      input += chunk
-      if (input.includes(EOL)) {
-        stdin.pause()
-        stdin.removeListener("data", onData)
-        resolve(input.split(EOL)[0] ?? "")
+type ReadableInput = Pick<typeof process.stdin, "setEncoding" | "resume" | "pause" | "on" | "removeListener">
+
+export function createBufferedLineReader(stdin: ReadableInput = process.stdin) {
+  let pendingStdin = ""
+
+  return function readLine(): Promise<string> {
+    return new Promise((resolve) => {
+      const takeBufferedLine = () => {
+        const index = pendingStdin.indexOf(EOL)
+        if (index === -1) return false
+        const line = pendingStdin.slice(0, index)
+        pendingStdin = pendingStdin.slice(index + EOL.length)
+        resolve(line)
+        return true
       }
-    }
-    stdin.on("data", onData)
-  })
+
+      if (takeBufferedLine()) return
+
+      const onData = (chunk: string) => {
+        pendingStdin += chunk
+        if (!takeBufferedLine()) return
+        stdin.removeListener("data", onData)
+        stdin.pause()
+      }
+
+      stdin.setEncoding("utf8")
+      stdin.resume()
+      stdin.on("data", onData)
+    })
+  }
 }
+
+const readLine = createBufferedLineReader()
 
 export function makeContext(base: Omit<PluginContext, "confirm">): PluginContext {
   return {
     ...base,
-    confirm: (request) => confirmViaStdin(request),
+    confirm: (request) => base.flags.confirm === true ? Promise.resolve(true) : confirmViaStdin(request),
   }
 }
 

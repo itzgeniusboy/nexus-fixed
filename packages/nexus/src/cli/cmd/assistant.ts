@@ -28,12 +28,18 @@ const FLAG_OPTIONS = [
   ["from", { type: "string", describe: "source language" }],
   ["to", { type: "string", describe: "target language" }],
   ["format", { type: "string", describe: "output format" }],
-  ["message", { type: "string", describe: "commit message" }],
+  ["message", { type: "string", alias: "m", describe: "commit message" }],
   ["browser", { type: "string", describe: "browser (chrome|edge)" }],
-  ["confirm", { type: "boolean", describe: "skip confirmation prompts" }],
+  ["confirm", { type: "boolean", describe: "explicitly approve applicable confirmation prompts for this command" }],
+  ["stage", { type: "boolean", describe: "explicitly stage reviewed local changes before a Git commit" }],
+  ["patch", { type: "boolean", describe: "show a bounded patch preview in addition to the change summary" }],
   ["force", { type: "boolean", describe: "force overwrite" }],
   ["sync", { type: "boolean", describe: "sync placeholders" }],
-  ["noVerify", { type: "boolean", describe: "skip critical review gate" }],
+  ["noVerify", { type: "boolean", describe: "legacy option; critical secret checks remain mandatory" }],
+  // yargs interprets `--no-verify` as negation of `verify` before camel-case
+  // aliases are resolved. Keep that legacy spelling parseable without allowing it
+  // to affect the unconditional critical-secret gate in Git Pro.
+  ["verify", { type: "boolean", hidden: true, describe: "legacy negation target" }],
   ["dryRun", { type: "boolean", describe: "show what would happen" }],
   ["newProfile", { type: "boolean", describe: "isolated browser profile" }],
   ["connectExisting", { type: "boolean", describe: "attach only to a user-started loopback CDP browser" }],
