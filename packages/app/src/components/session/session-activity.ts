@@ -44,9 +44,13 @@ export function deriveSessionActivity(input: {
   status: SessionStatus | undefined
   parts: readonly Part[]
   error?: unknown
+  waiting?: boolean
+  completed?: boolean
 }): SessionActivity | undefined {
   const status = input.status
   if (input.error) return { phase: "error", label: "Action failed", glyph: "!", tone: "error" }
+  if (input.waiting) return { phase: "waiting", label: "Waiting for approval", glyph: "‖", tone: "warning" }
+  if (input.completed) return { phase: "working", label: "Completed", glyph: "✓", tone: "muted" }
   if (!status || status.type === "idle") return
 
   if (status.type === "retry") {

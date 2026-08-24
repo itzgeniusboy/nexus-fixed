@@ -8,7 +8,7 @@ import { Spinner } from "@nexus-ai/ui/spinner"
 import { showToast } from "@/utils/toast"
 import { Tooltip, TooltipKeybind } from "@nexus-ai/ui/tooltip"
 import { getFilename } from "@nexus-ai/core/util/path"
-import { createEffect, createMemo, createSignal, For, onMount, Show } from "solid-js"
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
 import { Portal } from "solid-js/web"
@@ -235,6 +235,34 @@ export function SessionHeader() {
   const tint = createMemo(() =>
     messageAgentColor(params.id ? sync().data.message[params.id] : undefined, sync().data.agent),
   )
+  const [completedSession, setCompletedSession] = createSignal<string>()
+  let previousSessionStatus: "busy" | "retry" | "idle" | undefined
+  let completedTimer: number | undefined
+  createEffect(() => {
+    const sessionID = params.id
+    const next = sessionID ? (sync().data.session_status[sessionID]?.type ?? "idle") : "idle"
+    if (!sessionID) {
+      previousSessionStatus = undefined
+      setCompletedSession(undefined)
+      return
+    }
+    if (next === "busy" || next === "retry") {
+      if (completedTimer !== undefined) window.clearTimeout(completedTimer)
+      completedTimer = undefined
+      setCompletedSession(undefined)
+    } else if ((previousSessionStatus === "busy" || previousSessionStatus === "retry") && next === "idle") {
+      setCompletedSession(sessionID)
+      if (completedTimer !== undefined) window.clearTimeout(completedTimer)
+      completedTimer = window.setTimeout(() => {
+        completedTimer = undefined
+        setCompletedSession((current) => (current === sessionID ? undefined : current))
+      }, 3000)
+    }
+    previousSessionStatus = next
+  })
+  onCleanup(() => {
+    if (completedTimer !== undefined) window.clearTimeout(completedTimer)
+  })
   const activity = createMemo(() => {
     const sessionID = params.id
     if (!sessionID) return
@@ -244,6 +272,9 @@ export function SessionHeader() {
       status: sync().data.session_status[sessionID],
       parts: latestAssistant ? (sync().data.part[latestAssistant.id] ?? []) : [],
       error: latestAssistant?.error,
+      waiting:
+        (sync().data.permission[sessionID]?.length ?? 0) > 0 || (sync().data.question[sessionID]?.length ?? 0) > 0,
+      completed: completedSession() === sessionID,
     })
   })
   const activityRoute = createMemo(() => {

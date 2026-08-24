@@ -37,6 +37,18 @@ describe("deriveSessionActivity", () => {
     ).toMatchObject({ phase: "error", label: "Action failed", tone: "error" })
   })
 
+  test("shows waiting and completion only when supplied by real external session signals", () => {
+    expect(deriveSessionActivity({ status: { type: "busy" }, parts: [], waiting: true })).toMatchObject({
+      phase: "waiting",
+      label: "Waiting for approval",
+      tone: "warning",
+    })
+    expect(deriveSessionActivity({ status: { type: "idle" }, parts: [], completed: true })).toMatchObject({
+      label: "Completed",
+      tone: "muted",
+    })
+  })
+
   test("does not expose raw tool arguments or retry text", () => {
     const value = deriveSessionActivity({
       status: { type: "retry", attempt: 1, message: "sk-secret-value", next: 5 },
