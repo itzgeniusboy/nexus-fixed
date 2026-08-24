@@ -33,6 +33,7 @@ import { KeybindV2 } from "@nexus-ai/ui/v2/keybind-v2"
 import { TooltipV2 } from "@nexus-ai/ui/v2/tooltip-v2"
 import { reviewTooltipKeybind } from "../command-tooltip-keybind"
 import { useTitlebarRightMount } from "../titlebar"
+import { deriveSessionActivity, type SessionActivity } from "./session-activity"
 
 const OPEN_APPS = [
   "vscode",
@@ -234,9 +235,29 @@ export function SessionHeader() {
   const tint = createMemo(() =>
     messageAgentColor(params.id ? sync().data.message[params.id] : undefined, sync().data.agent),
   )
+  const activity = createMemo(() => {
+    const sessionID = params.id
+    if (!sessionID) return
+    const messages = sync().data.message[sessionID] ?? []
+    const latestAssistant = messages.findLast((message) => message.role === "assistant")
+    return deriveSessionActivity({
+      status: sync().data.session_status[sessionID],
+      parts: latestAssistant ? (sync().data.part[latestAssistant.id] ?? []) : [],
+      error: latestAssistant?.error,
+    })
+  })
+  const activityRoute = createMemo(() => {
+    const sessionID = params.id
+    if (!sessionID) return
+    const message = (sync().data.message[sessionID] ?? []).findLast((item) => item.role === "assistant")
+    if (!message?.modelID) return
+    return message.providerID ? `${message.providerID} · ${message.modelID}` : message.modelID
+  })
   const v2ActionsState = createMemo<SessionHeaderV2ActionsState>(() => ({
     statusVisible: status(),
     statusLabel: language.t("status.popover.trigger"),
+    activity: activity(),
+    route: activityRoute(),
     reviewLabel: language.t("command.review.toggle"),
     reviewKeybind: reviewTooltipKeybind(command),
     reviewVisible: isDesktop(),
@@ -440,6 +461,7 @@ export function SessionHeader() {
                     </div>
                   </Show>
                   <div class="flex items-center gap-1">
+                    <SessionActivityPill activity={activity()} route={activityRoute()} />
                     <Show when={status()}>
                       <Tooltip placement="bottom" value={language.t("status.popover.trigger")}>
                         <StatusPopover />
@@ -519,6 +541,8 @@ export function SessionHeader() {
 type SessionHeaderV2ActionsState = {
   statusVisible: boolean
   statusLabel: string
+  activity: SessionActivity | undefined
+  route: string | undefined
   reviewLabel: string
   reviewKeybind: string[]
   reviewVisible: boolean
@@ -531,6 +555,7 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
 
   return (
     <div class="flex items-center gap-2">
+      <SessionActivityPill activity={props.state.activity} route={props.state.route} />
       <Show when={props.state.statusVisible}>
         <Tooltip placement="bottom" value={props.state.statusLabel}>
           <StatusPopoverV2 />
@@ -564,5 +589,40 @@ function SessionHeaderV2Actions(props: { state: SessionHeaderV2ActionsState }) {
         </TooltipV2>
       </Show>
     </div>
+  )
+}
+
+function SessionActivityPill(props: { activity: SessionActivity | undefined; route: string | undefined }) {
+  const tone = () => {
+    if (props.activity?.tone === "error") return "text-red-400"
+    if (props.activity?.tone === "warning") return "text-amber-300"
+    if (props.activity?.tone === "active") return "text-cyan-300"
+    return "text-v2-text-text-faint"
+  }
+
+  return (
+    <Show when={props.activity}>
+      {(activity) => (
+        <div
+          data-component="session-activity"
+          aria-live="polite"
+          class="hidden max-w-[300px] items-center gap-1.5 rounded-md border border-v2-border-border-weak bg-v2-background-bg-weak px-2 py-1 text-[12px] leading-none md:flex"
+          title={props.route ? `${activity().label} · ${props.route}` : activity().label}
+        >
+          <span
+            aria-hidden="true"
+            class={`inline-flex size-3 shrink-0 items-center justify-center font-medium ${tone()} ${
+              activity().tone === "active" ? "motion-safe:animate-pulse" : ""
+            }`}
+          >
+            {activity().glyph}
+          </span>
+          <span class="shrink-0 text-v2-text-text-base">{activity().label}</span>
+          <Show when={props.route}>
+            <span class="min-w-0 truncate text-v2-text-text-faint">· {props.route}</span>
+          </Show>
+        </div>
+      )}
+    </Show>
   )
 }

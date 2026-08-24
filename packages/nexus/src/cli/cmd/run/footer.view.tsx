@@ -55,6 +55,7 @@ import type {
 } from "./types"
 import type { RunTheme } from "./theme"
 import { modelInfo } from "./variant.shared"
+import { deriveFooterActivity } from "./footer.activity"
 
 registerNexusSpinner()
 
@@ -415,6 +416,20 @@ export function RunFooterView(props: RunFooterViewProps) {
     }
 
     return shell() ? "Shell mode" : ""
+  })
+  const activity = createMemo(() =>
+    deriveFooterActivity({
+      busy: busy(),
+      exiting: exiting(),
+      armed: armed(),
+      status: stateStatus(),
+    }),
+  )
+  const activityColor = createMemo(() => {
+    if (activity()?.tone === "error") return theme().error
+    if (activity()?.tone === "warning") return theme().warning
+    if (activity()?.tone === "active") return theme().highlight
+    return theme().muted
   })
   const activityMeta = createMemo(() => {
     if (!responsive().statusline.showActivityMeta || usage().length === 0) {
@@ -839,18 +854,24 @@ export function RunFooterView(props: RunFooterViewProps) {
                   paddingRight={1}
                   backgroundColor="transparent"
                 >
-                  <Show when={busy() && !exiting()}>
+                  <Show when={activity()?.pulse && !exiting()}>
                     <box flexShrink={0}>
                       <spinner color={spin().color} frames={spin().frames} interval={40} />
                     </box>
                   </Show>
 
                   <text fg={statusColor()} wrapMode="none" truncate flexGrow={1} flexShrink={1}>
-                    <Show when={busy() && !exiting()} fallback={statusText()}>
-                      <Show when={interruptLabel()}>
-                        {(label) => <span style={{ fg: armed() ? statusColor() : theme().muted }}>{label()} </span>}
-                      </Show>
-                      {statusText()}
+                    <Show when={activity()} fallback={statusText()}>
+                      {(current) => (
+                        <>
+                          <span style={{ fg: activityColor(), bold: current().tone !== "muted" }}>
+                            {current().glyph} {current().label}
+                          </span>
+                          <Show when={statusText() && statusText() !== current().label}>
+                            <span style={{ fg: theme().muted }}> · {statusText()}</span>
+                          </Show>
+                        </>
+                      )}
                     </Show>
                   </text>
                 </box>
