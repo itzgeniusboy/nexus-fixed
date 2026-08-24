@@ -40,6 +40,8 @@ import { Heap } from "./cli/heap"
 import { ModCommand } from "./cli/cmd/mod"
 import { AssetCommand } from "./cli/cmd/asset"
 import { LuaCommand } from "./cli/cmd/lua"
+import { DoctorCommand } from "./cli/cmd/doctor"
+import { ProfileCommand } from "./cli/cmd/profile"
 
 const rawArgs = hideBin(process.argv)
 const args = rawArgs
@@ -125,6 +127,8 @@ const cli = yargs(args)
   .command(AssetCommand)
   .command(LuaCommand)
   .command(AssistantCommand)
+  .command(DoctorCommand)
+  .command(ProfileCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -39,6 +39,25 @@ test("detects a desktop high plan with twelve total active slots", () => {
     { device: "PC", mode: "high", maxParallel: 12, leadCount: 4, workerTaskCount: 12 },
   )
   assert.equal(formatDeviceMode(plan), "Device: PC (16GB) → HIGH mode")
+})
+
+test("an explicit Fast task profile caps capacity without changing the default device tier", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nexus-task-profile-"))
+  const profilePath = join(root, "task-profile.json")
+  const previousProfilePath = process.env.NEXUS_TASK_PROFILE_PATH
+  process.env.NEXUS_TASK_PROFILE_PATH = profilePath
+  try {
+    await writeFile(profilePath, JSON.stringify({ version: 1, profile: "fast" }), "utf8")
+    const plan = detectCapacity({ isTermux: false, totalMemoryBytes: 16 * GIB, processMemoryBytes: 0, meminfo: meminfo(16, 14) })
+    assert.deepEqual(
+      { maxParallel: plan.maxParallel, leadCount: plan.leadCount, workerTaskCount: plan.workerTaskCount },
+      { maxParallel: 2, leadCount: 1, workerTaskCount: 1 },
+    )
+  } finally {
+    if (previousProfilePath === undefined) delete process.env.NEXUS_TASK_PROFILE_PATH
+    else process.env.NEXUS_TASK_PROFILE_PATH = previousProfilePath
+    await rm(root, { recursive: true, force: true })
+  }
 })
 
 test("DualWorkerPool accounts for every active slot and never exceeds its cap", async () => {

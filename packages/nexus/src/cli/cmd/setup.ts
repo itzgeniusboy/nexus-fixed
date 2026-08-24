@@ -6,7 +6,7 @@ import { Effect, Option } from "effect"
 import { Process } from "@/util/process"
 import { readNexusConfig, writeNexusConfig } from "./config"
 import { PREFERRED_MODELS } from "@/provider/rotation"
-import { setupTermuxKeyboard } from "@nexus/termux-core"
+import { inspectDeviceGuard, setupTermuxKeyboard } from "@nexus/termux-core"
 import { arm64RecommendedModel } from "@nexus-ai/core/power"
 import { largeDownloadWarning } from "@nexus-ai/core/network"
 import { detectRuntimeEnvironment, type RuntimeEnvironment } from "@nexus-ai/core/platform"
@@ -218,6 +218,14 @@ export const SetupOllamaCommand = effectCmd({
     void serveProc.exited
 
     const model = arm64RecommendedModel() ?? "llama3"
+    const guard = inspectDeviceGuard()
+    if (guard.level === "blocked") {
+      return yield* fail(`Device Guard blocked this download: ${guard.warnings.join(" ")}`)
+    }
+    if (guard.warnings.length > 0) {
+      const accepted = yield* Effect.tryPromise(() => confirmLargeDownload(`Device Guard warning: ${guard.warnings.join(" ")}`))
+      if (!accepted) return yield* fail("Model download cancelled by Device Guard. Charge/cool the device or confirm interactively when ready.")
+    }
     const warning = yield* Effect.tryPromise(() => largeDownloadWarning(4 * 1024 * 1024 * 1024))
     if (warning && !(yield* Effect.tryPromise(() => confirmLargeDownload(warning)))) {
       return yield* fail("Model download cancelled. Connect to Wi-Fi or confirm the download interactively, then run `nexus setup ollama` again.")

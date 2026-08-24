@@ -81,6 +81,26 @@ function systemAvailableMemoryBytes() {
     : undefined
 }
 
+type StoredTaskProfile = "fast" | "balanced" | "deep" | "local"
+
+function configuredTaskProfile(): StoredTaskProfile | undefined {
+  try {
+    const raw = JSON.parse(
+      readFileSync(process.env.NEXUS_TASK_PROFILE_PATH || join(homedir(), ".nexus", "task-profile.json"), "utf8"),
+    ) as { profile?: unknown }
+    if (raw.profile === "fast" || raw.profile === "balanced" || raw.profile === "deep" || raw.profile === "local") return raw.profile
+  } catch {}
+  return undefined
+}
+
+function applyTaskProfile(plan: CapacityPlan, profile = configuredTaskProfile()): CapacityPlan {
+  if (!profile || profile === "deep") return plan
+  const maxParallel = Math.min(plan.maxParallel, profile === "balanced" ? 3 : 2)
+  const leadCount = 1
+  const workersPerLead = Math.max(1, maxParallel - 1)
+  return { ...plan, maxParallel, leadCount, workersPerLead, workerTaskCount: leadCount * workersPerLead }
+}
+
 export function detectCapacity(probe: CapacityProbe = {}): CapacityPlan {
   const device: DeviceKind = probe.isTermux ?? isTermuxRuntime() ? "Termux" : "PC"
   const meminfo = probe.meminfo
@@ -106,7 +126,7 @@ export function detectCapacity(probe: CapacityProbe = {}): CapacityPlan {
       ? { maxParallel: 6, leadCount: 2, workersPerLead: 3 }
       : { maxParallel: 3, leadCount: 1, workersPerLead: 2 }
 
-  return {
+  return applyTaskProfile({
     device,
     mode,
     totalMemoryBytes,
@@ -114,7 +134,7 @@ export function detectCapacity(probe: CapacityProbe = {}): CapacityPlan {
     processMemoryBytes,
     ...budget,
     workerTaskCount: budget.leadCount * budget.workersPerLead,
-  }
+  })
 }
 
 export function formatDeviceMode(capacity: CapacityPlan) {

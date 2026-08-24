@@ -22,3 +22,5 @@ export { CheckerAgent, ManagerAgent, TeamHierarchy, TeamLeadAgent, WorkerAgent, 
 export type { CheckerResult, LeadResult, ModulePlan, ProgressCallback, ProjectResult, RepoStats, TaskSize, TeamStatus, WorkerResult, WorkerTask } from "./agents/TeamHierarchy"
 export { UserLiaison, classifyMessage } from "./agents/UserLiaison"
 export type { LiaisonOptions, MessageType, TaskStatus } from "./agents/UserLiaison"
+export { inspectDeviceGuard } from "./DeviceGuard"
+export type { DeviceGuardLevel, DeviceGuardSnapshot } from "./DeviceGuard"
