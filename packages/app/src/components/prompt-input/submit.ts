@@ -336,7 +336,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     }
 
     const modelSelection = input.model ?? local.model
-    const currentModel = modelSelection.current()
+    const currentModel = modelSelection.isAuto?.()
+      ? (modelSelection.resolve?.({ tools: mode !== "shell", vision: images.length > 0 }) ?? modelSelection.current())
+      : modelSelection.current()
     const currentAgent = local.agent.current()
     const variant = modelSelection.variant.current()
     if (!currentModel || !currentAgent) {

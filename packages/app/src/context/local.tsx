@@ -16,6 +16,7 @@ import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
+export type AutoModelRequirements = { tools?: boolean; vision?: boolean }
 
 type State = {
   agent?: string
@@ -230,15 +231,44 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
     }
 
-    const current = () => {
-      const item = firstModel(
+    const explicitModel = () =>
+      firstModel(
         () => scope()?.model,
         () => agent.current()?.model,
-        fallback,
       )
-      if (!item) return
-      return models.find(item)
+
+    const resolveAuto = (requirements: AutoModelRequirements = {}) => {
+      const supports = (item: NonNullable<ReturnType<typeof models.find>>) =>
+        (!requirements.tools || item.tool_call) &&
+        (!requirements.vision || item.attachment || item.modalities?.input?.includes("image"))
+      const preferred = configuredModel() ?? defaultModel()
+      const preferredItem = preferred ? models.find(preferred) : undefined
+      if (preferredItem && supports(preferredItem)) return preferredItem
+      const candidates = models
+        .list()
+        .filter((item) => validModel({ providerID: item.provider.id, modelID: item.id }))
+        .filter(supports)
+        .sort((a, b) => {
+          const score = (item: typeof a) =>
+            (item.tool_call ? 100_000 : 0) +
+            (item.attachment || item.modalities?.input?.includes("image") ? 10_000 : 0) +
+            (item.reasoning ? 1_000 : 0) +
+            Math.min(item.limit?.output ?? 0, 32_000)
+          return score(b) - score(a) || a.name.localeCompare(b.name)
+        })
+      const selected = candidates[0]
+      if (selected) return selected
+      const fallbackItem = fallback()
+      return fallbackItem ? models.find(fallbackItem) : undefined
     }
+
+    const resolve = (requirements: AutoModelRequirements = {}) => {
+      const selected = explicitModel()
+      if (selected) return models.find(selected)
+      return resolveAuto(requirements)
+    }
+
+    const current = () => resolve({ tools: true })
 
     const configured = () => {
       const item = agent.current()
@@ -280,6 +310,10 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const model = {
       ready: models.ready,
       current,
+      resolve,
+      isAuto() {
+        return !scope()?.model
+      },
       recent,
       list: models.list,
       cycle(direction: 1 | -1) {
@@ -314,6 +348,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             models.recent.push(item)
           }),
         )
+      },
+      setAuto() {
+        this.set(undefined)
       },
       visible(item: ModelKey) {
         return models.visible(item)

@@ -42,6 +42,7 @@ type ModelItem = ReturnType<ModelState["list"]>[number]
 
 const modelKey = (model: ModelItem) => `${model.provider.id}:${model.id}`
 const manageKey = "action:manage"
+const autoKey = "action:auto"
 
 const sortModelGroups = (a: { category: string; items: ModelItem[] }, b: { category: string; items: ModelItem[] }) => {
   const aIndex = popularProviders.indexOf(a.category)
@@ -283,6 +284,8 @@ export function ModelSelectorPopoverV2(props: {
       models={controller.models}
       groups={controller.groups}
       current={controller.current}
+      auto={controller.auto}
+      setAuto={controller.setAuto}
       select={controller.select}
       activeOnly={controller.activeOnly}
       setActiveOnly={controller.setActiveOnly}
@@ -345,6 +348,11 @@ function createModelSelectorController(input: {
       const value = model.current()
       return value ? modelKey(value) : undefined
     },
+    auto: () => model.isAuto(),
+    setAuto: () => {
+      model.setAuto()
+      input.onSelect()
+    },
     select: (item: ModelItem) => {
       model.set({ modelID: item.id, providerID: item.provider.id }, { recent: true })
       input.onSelect()
@@ -357,6 +365,8 @@ function ModelSelectorPopoverV2View(props: {
   models: (search: string) => ModelItem[]
   groups: (models: ModelItem[]) => { category: string; items: ModelItem[] }[]
   current: () => string | undefined
+  auto: () => boolean
+  setAuto: () => void
   select: (item: ModelItem) => void
   activeOnly: () => boolean
   setActiveOnly: (value: boolean) => void
@@ -372,8 +382,9 @@ function ModelSelectorPopoverV2View(props: {
 
   const models = createMemo(() => props.models(store.search))
   const groups = createMemo(() => props.groups(models()))
-  const keys = () => [...models().map(modelKey), manageKey]
+  const keys = () => [autoKey, ...models().map(modelKey), manageKey]
   const initialActive = () => {
+    if (props.auto()) return autoKey
     const selected = props.current()
     const options = keys()
     if (selected && options.includes(selected)) return selected
@@ -409,6 +420,12 @@ function ModelSelectorPopoverV2View(props: {
     const item = models().find((item) => modelKey(item) === store.active)
     if (item) {
       selectModel(item)
+      return
+    }
+    if (store.active === autoKey) {
+      dismiss.preventTriggerRestore()
+      setOpen(false)
+      dismiss.afterClose(props.setAuto)
       return
     }
     if (store.active === manageKey) manage()
@@ -511,6 +528,26 @@ function ModelSelectorPopoverV2View(props: {
               <span class="text-v2-text-text-faint">{props.activeCount()}</span>
             </button>
           </Show>
+          <div class="h-px bg-v2-border-border-muted" />
+          <div class="flex flex-col p-0.5">
+            <MenuV2.Item
+              data-option-key={autoKey}
+              classList={{ "!bg-v2-overlay-simple-overlay-hover": store.active === autoKey || props.auto() }}
+              onMouseEnter={() => {
+                setStore("active", autoKey)
+                setTimeout(() => searchRef?.focus())
+              }}
+              onSelect={() => {
+                dismiss.preventTriggerRestore()
+                setOpen(false)
+                dismiss.afterClose(props.setAuto)
+              }}
+            >
+              <Icon name="brain" size="small" />
+              <span class="min-w-0 flex-1 truncate leading-5">Auto Model</span>
+              <TagV2 class="shrink-0">Recommended</TagV2>
+            </MenuV2.Item>
+          </div>
           <div class="h-px bg-v2-border-border-muted" />
           <ScrollView data-slot="model-selector-scroll" class="max-h-[220px] min-h-0">
             <div class="flex flex-col p-0.5 pt-0">
@@ -623,6 +660,16 @@ export const DialogSelectModel: Component<{ provider?: string; model?: ModelStat
         </Button>
       }
     >
+      <Button
+        variant="ghost"
+        class="mx-3 mt-3 text-text-base self-start"
+        onClick={() => {
+          ;(props.model ?? local.model).setAuto()
+          dialog.close()
+        }}
+      >
+        Auto Model (recommended)
+      </Button>
       <ModelList provider={props.provider} model={props.model} onSelect={() => dialog.close()} />
       <Button variant="ghost" class="ml-3 mt-5 mb-6 text-text-base self-start" onClick={manage}>
         {language.t("dialog.model.manage")}

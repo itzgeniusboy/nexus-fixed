@@ -1708,8 +1708,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                                 />
                               </Show>
                               <span class="truncate">
-                                {props.controls.model.selection.current()?.name ??
-                                  language.t("dialog.model.select.title")}
+                                {props.controls.model.selection.isAuto()
+                                  ? "Auto Model"
+                                  : (props.controls.model.selection.current()?.name ?? language.t("dialog.model.select.title"))}
                               </span>
                               <Icon name="chevron-down" size="small" class="shrink-0" />
                             </Button>
@@ -1741,8 +1742,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                                   />
                                 </Show>
                                 <span class="truncate">
-                                  {props.controls.model.selection.current()?.name ??
-                                    language.t("dialog.model.select.title")}
+                                  {props.controls.model.selection.isAuto()
+                                    ? "Auto Model"
+                                    : (props.controls.model.selection.current()?.name ?? language.t("dialog.model.select.title"))}
                                 </span>
                                 <Icon name="chevron-down" size="small" class="shrink-0" />
                               </Button>

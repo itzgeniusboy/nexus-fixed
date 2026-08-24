@@ -2,8 +2,9 @@ import { Dialog } from "@nexus-ai/ui/dialog"
 import { List } from "@nexus-ai/ui/list"
 import { ProviderIcon } from "@nexus-ai/ui/provider-icon"
 import { useDialog } from "@nexus-ai/ui/context/dialog"
-import type { Component } from "solid-js"
+import { Show, type Component } from "solid-js"
 import { DialogProviderKeys } from "./dialog-provider-keys"
+import { DialogConnectProvider } from "./dialog-connect-provider"
 import { NEXUS_API_KEY_PROVIDERS } from "./palette-api-key-providers"
 
 export const DialogPaletteApiKeys: Component = () => {
@@ -24,12 +25,18 @@ export const DialogPaletteApiKeys: Component = () => {
           filterKeys={["id", "name"]}
           onSelect={(provider) => {
             if (!provider) return
+            if (provider.id === "custom") {
+              void dialog.show(() => <DialogConnectProvider />)
+              return
+            }
             void dialog.show(() => <DialogProviderKeys provider={provider.id} />)
           }}
         >
           {(provider) => (
             <div class="flex w-full items-center gap-3">
-              <ProviderIcon id={provider.id} />
+              <Show when={provider.id !== "custom"} fallback={<span class="flex size-5 items-center justify-center text-text-weak">+</span>}>
+                <ProviderIcon id={provider.id} />
+              </Show>
               <span>{provider.name}</span>
             </div>
           )}
