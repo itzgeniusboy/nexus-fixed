@@ -31,6 +31,9 @@ async function runWizard(): Promise<void> {
   let saved = 0
   for (const provider of API_PROVIDERS) {
     const label = resolveProviderLabel(provider)
+    if (provider === "nvidia-nim") {
+      prompts.log.info("NVIDIA NIM uses a hosted API key from build.nvidia.com. Model access and limits are account-specific.")
+    }
     const result = await prompts.password({
       message: `${label} API key (ENTER = skip)`,
     })
@@ -64,7 +67,7 @@ const AddCommand = cmd({
     yargs
       .positional("provider", {
         describe:
-          "provider id/alias (openai, anthropic, claude, gemini, groq, openrouter, cloudflare/workers-ai, xai/grok, deepseek, mistral, together, perplexity, cohere, fireworks, kimi, cerebras) — omit for wizard",
+          "provider id/alias (openai, anthropic, claude, gemini, groq, openrouter, cloudflare/workers-ai, nvidia-nim/nvidia-api/nim, xai/grok, deepseek, mistral, together, perplexity, cohere, fireworks, kimi, cerebras) — omit for wizard",
         type: "string",
       })
       .positional("key", { type: "string", describe: "API key" })
@@ -93,6 +96,9 @@ const AddCommand = cmd({
       process.stdout.write(`✓ ${label} key saved (${entry.label})\n`)
       process.stdout.write(`  Vault: ${apiVaultKeyPath()}\n`)
       process.stdout.write(`  Stored: ${maskApiKey(entry.key)}\n`)
+      if (provider === "nvidia-nim") {
+        process.stdout.write("  NVIDIA NIM: create or manage the API key at build.nvidia.com; model access and limits are account-specific.\n")
+      }
     } catch (error) {
       printError(error)
       process.exitCode = 1

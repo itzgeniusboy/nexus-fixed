@@ -114,6 +114,7 @@ export const PROVIDER_FALLBACK_ORDER = [
   "groq",
   "openrouter",
   "cloudflare-workers-ai",
+  "nvidia-nim",
   "google",
   "ollama",
   "opencode",
@@ -157,6 +158,12 @@ export const PREFERRED_MODELS = {
     "@cf/qwen/qwen2.5-coder-32b-instruct",
     "@cf/meta/llama-3.2-11b-vision-instruct",
     "@cf/qwen/qwq-32b",
+  ],
+  "nvidia-nim": [
+    "meta/llama-3.3-70b-instruct",
+    "qwen/qwen2.5-coder-32b-instruct",
+    "nvidia/nemotron-3.5-lightning-30b-a3b",
+    "qwen/qwen3-next-80b-a3b-thinking",
   ],
 } as const
 
@@ -224,7 +231,7 @@ export function configuredProviderKeys(apiKeys: RotatingKeys | undefined, provid
 export function normalizeProviderKeyName(key: string): string | undefined {
   const normalized = key.trim().toUpperCase()
   if (!normalized.endsWith("_API_KEY")) return undefined
-  const provider = normalized.slice(0, -"_API_KEY".length).toLowerCase()
+  const provider = normalized.slice(0, -"_API_KEY".length).toLowerCase().replace(/_/g, "-")
   const known = [
     "groq",
     "openrouter",
@@ -242,6 +249,7 @@ export function normalizeProviderKeyName(key: string): string | undefined {
     "fireworks",
     "moonshotai",
     "cloudflare",
+    "nvidia-nim",
   ]
   if (!known.includes(provider)) return undefined
   if (provider === "gemini") return "google"

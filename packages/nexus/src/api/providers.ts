@@ -273,6 +273,56 @@ export const PROVIDER_CONTRACTS: Record<string, ProviderContract> = {
       },
     ],
   },
+  "nvidia-nim": {
+    id: "nvidia-nim",
+    label: "NVIDIA NIM",
+    aliases: ["nvidia-api", "nim"],
+    // Hosted NVIDIA API Catalog inference only. This must not be confused with
+    // a user-operated local NIM container or imply any local GPU requirement.
+    modelsEndpoint: "https://integrate.api.nvidia.com/v1/models",
+    auth: "bearer",
+    baseURL: "https://integrate.api.nvidia.com/v1",
+    npm: "@ai-sdk/openai-compatible",
+    env: ["NVIDIA_NIM_API_KEY"],
+    curatedModels: [
+      {
+        id: "meta/llama-3.3-70b-instruct",
+        name: "Llama 3.3 70B Instruct",
+        context: 131072,
+        output: 8192,
+        toolCall: false,
+        reasoning: false,
+        input: ["text"],
+      },
+      {
+        id: "qwen/qwen2.5-coder-32b-instruct",
+        name: "Qwen 2.5 Coder 32B Instruct",
+        context: 32768,
+        output: 8192,
+        toolCall: false,
+        reasoning: false,
+        input: ["text"],
+      },
+      {
+        id: "nvidia/nemotron-3.5-lightning-30b-a3b",
+        name: "Nemotron 3.5 Lightning 30B",
+        context: 32768,
+        output: 8192,
+        toolCall: false,
+        reasoning: false,
+        input: ["text"],
+      },
+      {
+        id: "qwen/qwen3-next-80b-a3b-thinking",
+        name: "Qwen3 Next 80B Thinking",
+        context: 32768,
+        output: 8192,
+        toolCall: false,
+        reasoning: true,
+        input: ["text"],
+      },
+    ],
+  },
 }
 
 export const REGISTRY_PROVIDER_IDS = Object.keys(PROVIDER_CONTRACTS)

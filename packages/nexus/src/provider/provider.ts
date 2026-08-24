@@ -644,6 +644,17 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           },
         },
       }),
+    "nvidia-nim": (provider) =>
+      Effect.succeed({
+        autoload: provider.source === "config",
+        options: {
+          headers: {
+            "HTTP-Referer": "https://nexus.ai/",
+            "X-Title": "nexus",
+            "X-BILLING-INVOKE-ORIGIN": "NEXUS",
+          },
+        },
+      }),
     vercel: () =>
       Effect.succeed({
         autoload: false,
