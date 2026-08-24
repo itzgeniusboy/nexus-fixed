@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import { Global } from "@nexus-ai/core/global"
 import { redactSensitive } from "@nexus-ai/assistant/core/redact"
 
-export const AGENT_PLATFORM_SCHEMA_VERSION = 3
+export const AGENT_PLATFORM_SCHEMA_VERSION = 4
 
 export type MemoryScope = "device" | "project" | "channel"
 export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "instruction"
@@ -109,6 +109,18 @@ export type ScheduleExecutionClaim = {
   leaseExpiresAt?: number
 }
 
+export type BrowserHandoffStatus = "awaiting_user" | "resumed" | "completed_by_user" | "cancelled" | "expired"
+export type BrowserHandoff = {
+  id: string
+  origin: string
+  purpose: string
+  status: BrowserHandoffStatus
+  createdAt: number
+  updatedAt: number
+  resumedAt?: number
+  completedAt?: number
+}
+
 type StoreOptions = { path?: string }
 
 function now() {
@@ -189,6 +201,25 @@ function decodeGatewayConnection(row: Record<string, unknown>): GatewayConnectio
     createdAt: Number(row.time_created),
     updatedAt: Number(row.time_updated),
   }
+}
+
+function decodeBrowserHandoff(row: Record<string, unknown>): BrowserHandoff {
+  return {
+    id: String(row.id),
+    origin: String(row.origin),
+    purpose: String(row.purpose),
+    status: row.status as BrowserHandoffStatus,
+    createdAt: Number(row.time_created),
+    updatedAt: Number(row.time_updated),
+    resumedAt: row.time_resumed == null ? undefined : Number(row.time_resumed),
+    completedAt: row.time_completed == null ? undefined : Number(row.time_completed),
+  }
+}
+
+function assertBrowserOrigin(value: string) {
+  const parsed = new URL(value)
+  if (!/^https?:$/.test(parsed.protocol) || parsed.origin !== value) throw new Error("Browser handoff records require an HTTP(S) origin without a path, query, or fragment")
+  return parsed.origin
 }
 
 function assertCredentialReference(value: string) {
@@ -362,6 +393,20 @@ export class AgentPlatformStore {
     if (version < 3) this.db.exec(`
       ALTER TABLE agent_adapter_connection ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'local';
       PRAGMA user_version = 3;
+    `)
+    if (version < 4) this.db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_browser_handoff (
+        id TEXT PRIMARY KEY,
+        origin TEXT NOT NULL,
+        purpose TEXT NOT NULL,
+        status TEXT NOT NULL,
+        time_created INTEGER NOT NULL,
+        time_updated INTEGER NOT NULL,
+        time_resumed INTEGER,
+        time_completed INTEGER
+      );
+      CREATE INDEX IF NOT EXISTS agent_browser_handoff_updated ON agent_browser_handoff(time_updated DESC);
+      PRAGMA user_version = 4;
     `)
   }
 
@@ -681,6 +726,48 @@ export class AgentPlatformStore {
     }
     this.audit("schedule.execution_claimed", "schedule_execution", claim.id, { scheduleId: claim.scheduleId, scheduledWindow: claim.scheduledWindow })
     return claim
+  }
+
+  createBrowserHandoff(input: { origin: string; purpose: string }) {
+    const timestamp = now()
+    const handoff: BrowserHandoff = {
+      id: randomUUID(),
+      origin: assertBrowserOrigin(input.origin),
+      purpose: redactSensitive(input.purpose).trim(),
+      status: "awaiting_user",
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    }
+    if (!handoff.purpose) throw new Error("Browser handoff requires a non-sensitive purpose")
+    this.db.query("INSERT INTO agent_browser_handoff (id, origin, purpose, status, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(handoff.id, handoff.origin, handoff.purpose, handoff.status, timestamp, timestamp)
+    this.audit("browser_handoff.opened", "browser_handoff", handoff.id, { origin: handoff.origin })
+    return handoff
+  }
+
+  listBrowserHandoffs() {
+    return (this.db.query("SELECT * FROM agent_browser_handoff ORDER BY time_updated DESC").all() as Record<string, unknown>[]).map(decodeBrowserHandoff)
+  }
+
+  transitionBrowserHandoff(id: string, operation: "resume" | "complete" | "cancel") {
+    const row = this.db.query("SELECT * FROM agent_browser_handoff WHERE id = ?").get(id) as Record<string, unknown> | null
+    if (!row) throw new Error(`Browser handoff not found: ${id}`)
+    const current = decodeBrowserHandoff(row)
+    const timestamp = now()
+    if (operation === "resume") {
+      if (current.status !== "awaiting_user") throw new Error(`Browser handoff ${id} cannot resume from ${current.status}`)
+      this.db.query("UPDATE agent_browser_handoff SET status = 'resumed', time_updated = ?, time_resumed = ? WHERE id = ?").run(timestamp, timestamp, id)
+    }
+    if (operation === "complete") {
+      if (current.status !== "resumed") throw new Error(`Browser handoff ${id} must be resumed before it can be completed by the user`)
+      this.db.query("UPDATE agent_browser_handoff SET status = 'completed_by_user', time_updated = ?, time_completed = ? WHERE id = ?").run(timestamp, timestamp, id)
+    }
+    if (operation === "cancel") {
+      if (current.status !== "awaiting_user" && current.status !== "resumed") throw new Error(`Browser handoff ${id} cannot cancel from ${current.status}`)
+      this.db.query("UPDATE agent_browser_handoff SET status = 'cancelled', time_updated = ? WHERE id = ?").run(timestamp, id)
+    }
+    this.audit(`browser_handoff.${operation}d`, "browser_handoff", id, { origin: current.origin })
+    return decodeBrowserHandoff(this.db.query("SELECT * FROM agent_browser_handoff WHERE id = ?").get(id) as Record<string, unknown>)
   }
 
   private audit(action: string, entityType: string, entityId: string, detail: Record<string, unknown>) {

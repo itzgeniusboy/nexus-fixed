@@ -11,6 +11,7 @@ import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
 import { AgentPlatformStore, type GatewayChannel, type GatewayRuntimeMode, type LearningStatus, type MemoryKind, type MemoryScope, type MemorySyncPack } from "../../agent-platform/store"
+import { openLocalBrowser, parseBrowserHandoffTarget } from "../../agent-platform/browser-handoff"
 import { clearLocalGatewayState, defaultLocalGatewayStatePath, gatewayCredentialName, isLocalGatewayProcessRunning, pollTelegramOnce, readLocalGatewayState, startLocalGatewayServer, type GatewayCredentialKind } from "../../agent-platform/gateway-local"
 import { planGatewayRun } from "../../agent-platform/gateway"
 import { SecretStore } from "@nexus-ai/assistant/core/secret-store"
@@ -555,6 +556,59 @@ const AgentGatewayCommand = cmd({
   },
 })
 
+const AgentBrowserCommand = cmd({
+  command: "browser <operation> [id]",
+  describe: "open an explicitly approved local browser page and record human-controlled handoff checkpoints",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["start", "list", "resume", "complete", "cancel"] as const, describe: "browser handoff operation" })
+      .positional("id", { type: "string", describe: "browser handoff id for resume, complete, or cancel" })
+      .option("url", { type: "string", describe: "explicit http(s) URL to open locally for start" })
+      .option("purpose", { type: "string", describe: "non-sensitive reason for the browser handoff" })
+      .option("confirm", { type: "boolean", default: false, describe: "confirm this local browser handoff or state transition" }),
+  async handler(args: any) {
+    const store = new AgentPlatformStore()
+    try {
+      if (args.operation === "start") {
+        if (!args.confirm) throw new Error("Opening a browser handoff requires --confirm")
+        if (!args.url || !args.purpose) throw new Error("Browser handoff start requires --url and --purpose")
+        const target = parseBrowserHandoffTarget(args.url)
+        const handoff = store.createBrowserHandoff({ origin: target.origin, purpose: args.purpose })
+        try {
+          await openLocalBrowser(target.launchUrl)
+        } catch (error) {
+          store.transitionBrowserHandoff(handoff.id, "cancel")
+          throw error
+        }
+        process.stdout.write(`Opened ${handoff.origin} in your local browser. Handoff ${handoff.id} is awaiting you.${EOL}`)
+        if (target.hasSensitiveQuery) process.stdout.write(`Warning: the URL contains a sensitive-looking query parameter. It was opened locally but its value was not stored.${EOL}`)
+        process.stdout.write(`Complete login, password/OTP/CAPTCHA, private data entry, declarations, payments, and final submission yourself in the browser. Then run: nexus agent browser resume ${handoff.id} --confirm${EOL}`)
+        return
+      }
+      if (args.operation === "list") {
+        const handoffs = store.listBrowserHandoffs()
+        if (!handoffs.length) process.stdout.write("No local browser handoffs recorded" + EOL)
+        for (const handoff of handoffs) process.stdout.write(`${handoff.id}\t${handoff.status}\t${handoff.origin}\t${handoff.purpose}${EOL}`)
+        return
+      }
+      if (!args.id) throw new Error(`Browser handoff id required for ${args.operation}`)
+      if (!args.confirm) throw new Error(`Browser handoff ${args.operation} requires --confirm`)
+      const handoff = store.transitionBrowserHandoff(args.id, args.operation as "resume" | "complete" | "cancel")
+      if (args.operation === "resume") {
+        process.stdout.write(`Handoff ${handoff.id} resumed. This records only your confirmation; NEXUS did not inspect the browser, read credentials, or verify a website state.${EOL}`)
+      } else if (args.operation === "complete") {
+        process.stdout.write(`Handoff ${handoff.id} recorded as completed by you. NEXUS did not submit or verify any external form or action.${EOL}`)
+      } else {
+        process.stdout.write(`Handoff ${handoff.id} cancelled locally. No browser data was retained.${EOL}`)
+      }
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
 const AgentRunCommand = cmd({
   command: "run <operation>",
   describe: "plan bounded local subagent work; planning does not start hidden background execution",
@@ -590,6 +644,6 @@ const AgentRunCommand = cmd({
 export const AgentCommand = cmd({
   command: "agent",
   describe: "manage agents",
-  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentRunCommand).demandCommand(),
+  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).demandCommand(),
   async handler() {},
 })

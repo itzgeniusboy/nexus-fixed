@@ -54,6 +54,18 @@ describe("AgentPlatformStore", () => {
     target.close()
   })
 
+  test("records browser handoffs by redacted origin and requires explicit user checkpoints", () => {
+    const store = makeStore()
+    const handoff = store.createBrowserHandoff({ origin: "https://portal.example.test", purpose: "Continue after api_key=secret-value" })
+    expect(handoff.origin).toBe("https://portal.example.test")
+    expect(handoff.purpose).not.toContain("secret-value")
+    expect(() => store.createBrowserHandoff({ origin: "https://portal.example.test/login?token=secret", purpose: "login" })).toThrow("origin")
+    expect(() => store.transitionBrowserHandoff(handoff.id, "complete")).toThrow("must be resumed")
+    expect(store.transitionBrowserHandoff(handoff.id, "resume").status).toBe("resumed")
+    expect(store.transitionBrowserHandoff(handoff.id, "complete").status).toBe("completed_by_user")
+    store.close()
+  })
+
   test("keeps learning proposed until an explicit approval creates a skill revision", () => {
     const store = makeStore()
     const proposal = store.proposeLearning({ runId: "run-1", title: "Safe API checks", summary: "Mask keys", skillDraft: "Always mask api_key=secret", evidence: ["api_key=secret"] })
