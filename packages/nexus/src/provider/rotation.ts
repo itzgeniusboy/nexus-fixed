@@ -113,6 +113,7 @@ export class RotationEngine {
 export const PROVIDER_FALLBACK_ORDER = [
   "groq",
   "openrouter",
+  "cloudflare-workers-ai",
   "google",
   "ollama",
   "opencode",
@@ -151,6 +152,12 @@ export const PREFERRED_MODELS = {
   cohere: ["command-a-03-2025", "command-r-plus-08-2024"],
   fireworks: ["accounts/fireworks/models/llama-v3p3-70b-instruct"],
   moonshotai: ["kimi-k2-0711-preview", "moonshot-v1-8k"],
+  "cloudflare-workers-ai": [
+    "@cf/meta/llama-3.1-8b-instruct",
+    "@cf/qwen/qwen2.5-coder-32b-instruct",
+    "@cf/meta/llama-3.2-11b-vision-instruct",
+    "@cf/qwen/qwq-32b",
+  ],
 } as const
 
 export type PreferredProvider = keyof typeof PREFERRED_MODELS
@@ -234,9 +241,12 @@ export function normalizeProviderKeyName(key: string): string | undefined {
     "cohere",
     "fireworks",
     "moonshotai",
+    "cloudflare",
   ]
   if (!known.includes(provider)) return undefined
-  return provider === "gemini" ? "google" : provider
+  if (provider === "gemini") return "google"
+  if (provider === "cloudflare") return "cloudflare-workers-ai"
+  return provider
 }
 
 export function redactSecret(value: string): string {

@@ -65,6 +65,9 @@ function publicEntry(entry: ReturnType<typeof addApiKey>, index = 1) {
     added: entry.added,
     ...(entry.lastChecked ? { lastChecked: entry.lastChecked } : {}),
     ...(entry.suspendedUntil ? { suspendedUntil: entry.suspendedUntil } : {}),
+    ...(entry.cooldownUntil ? { cooldownUntil: entry.cooldownUntil } : {}),
+    ...(entry.lastFailure ? { lastFailure: entry.lastFailure } : {}),
+    ...(entry.lastLatencyMs !== undefined ? { lastLatencyMs: entry.lastLatencyMs } : {}),
     todayRequests: 0,
     todayInputTokens: 0,
     todayOutputTokens: 0,
@@ -121,7 +124,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         if (credential.type !== "api") continue
         const normalized = normalizeProvider(providerID)
         if (!normalized || existing.has(`${normalized}:${credential.key}`)) continue
-        const entry = ensureApiKey(normalized, credential.key, "auth")
+        const entry = ensureApiKey(normalized, credential.key, "auth", credential.metadata)
         if (entry) existing.add(`${normalized}:${entry.key}`)
       }
       const vault = loadApiVault()
@@ -129,18 +132,18 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     })
 
     const keysAdd = Effect.fn("ProviderHttpApi.keysAdd")(function* (ctx: {
-      payload: { provider: string; key: string; label?: string }
+      payload: { provider: string; key: string; label?: string; metadata?: { accountId?: string } }
     }) {
       let entry: ReturnType<typeof addApiKey>
       try {
-        entry = addApiKey(ctx.payload.provider, ctx.payload.key, ctx.payload.label ?? "default", "ui")
+        entry = addApiKey(ctx.payload.provider, ctx.payload.key, ctx.payload.label ?? "default", "ui", ctx.payload.metadata)
       } catch (error) {
         return yield* Effect.fail(vaultError(error, ctx.payload.provider))
       }
       const normalized = normalizeProvider(ctx.payload.provider)
       if (normalized) {
         yield* authStore
-          .set(ctx.payload.provider, new Auth.Api({ type: "api", key: entry.key }))
+          .set(normalized, new Auth.Api({ type: "api", key: entry.key, ...(entry.metadata ? { metadata: entry.metadata } : {}) }))
           .pipe(Effect.orElseSucceed(() => undefined))
       }
       const providerID = normalized ?? ctx.payload.provider
@@ -170,7 +173,14 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
           )
           if (replacement)
             yield* authStore
-              .set(ctx.params.providerID, new Auth.Api({ type: "api", key: replacement.entry.key }))
+              .set(
+                ctx.params.providerID,
+                new Auth.Api({
+                  type: "api",
+                  key: replacement.entry.key,
+                  ...(replacement.entry.metadata ? { metadata: replacement.entry.metadata } : {}),
+                }),
+              )
               .pipe(Effect.orElseSucceed(() => undefined))
           else yield* authStore.remove(ctx.params.providerID).pipe(Effect.orElseSucceed(() => undefined))
         }
@@ -209,12 +219,13 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         if (!normalized || known.has(`${normalized}:${credential.key}`)) continue
         entries.push({
           provider: normalized,
-          entry: {
-            key: credential.key,
+            entry: {
+              key: credential.key,
             label: "auth",
             added: new Date().toISOString().slice(0, 10),
             status: "unknown",
-            failures: 0,
+              failures: 0,
+              ...(credential.metadata ? { metadata: credential.metadata } : {}),
           },
         })
       }
@@ -242,7 +253,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
             .map(async ({ provider: providerID, entry }) => ({
               providerID,
               entry,
-              discovered: await discoverProviderModels(providerID, entry.key),
+              discovered: await discoverProviderModels(providerID, entry.key, entry.metadata),
             })),
         ),
       )

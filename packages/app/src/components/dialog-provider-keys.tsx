@@ -16,6 +16,7 @@ export const DialogProviderKeys: Component<{ provider: string }> = (props) => {
   const serverSDK = useServerSDK()
   const [key, setKey] = createSignal("")
   const [label, setLabel] = createSignal("")
+  const [accountId, setAccountId] = createSignal("")
   const [busy, setBusy] = createSignal(false)
   const [data, { refetch }] = createResource(
     () => props.provider,
@@ -23,6 +24,7 @@ export const DialogProviderKeys: Component<{ provider: string }> = (props) => {
   )
 
   const entries = () => data()?.providers.find((item) => item.provider === props.provider)?.keys ?? []
+  const requiresAccountId = () => props.provider === "cloudflare-workers-ai"
 
   const add = async (event: SubmitEvent) => {
     event.preventDefault()
@@ -34,10 +36,12 @@ export const DialogProviderKeys: Component<{ provider: string }> = (props) => {
         provider: props.provider,
         key: value,
         ...(label().trim() ? { label: label().trim() } : {}),
+        ...(requiresAccountId() ? { metadata: { accountId: accountId().trim() } } : {}),
       })
       await serverSDK().client.global.dispose()
       setKey("")
       setLabel("")
+      setAccountId("")
       await refetch()
       showToast({ variant: "success", icon: "circle-check", title: "API key added" })
     } catch (error) {
@@ -71,7 +75,10 @@ export const DialogProviderKeys: Component<{ provider: string }> = (props) => {
   return (
     <Dialog title={`API keys · ${props.provider}`}>
       <div class="flex flex-col gap-5 px-2.5 pb-6">
-        <p class="text-14-regular text-text-base">Keys stay local and are shown here only in masked form.</p>
+        <p class="text-14-regular text-text-base">
+          Keys stay local and are shown here only in masked form.
+          <Show when={requiresAccountId()}> Your Cloudflare Account ID stays local and is never shown in this list.</Show>
+        </p>
         <div class="flex flex-col gap-2">
           <Show when={data.loading}>
             <div class="py-3 text-14-regular text-text-weak">Loading keys…</div>
@@ -98,8 +105,14 @@ export const DialogProviderKeys: Component<{ provider: string }> = (props) => {
         </div>
         <form onSubmit={add} class="flex flex-col gap-3 border-t border-border-weak-base pt-4">
           <TextField label="API key" type="password" autocomplete="off" value={key()} onChange={setKey} />
+          <Show when={requiresAccountId()}>
+            <TextField label="Cloudflare Account ID" autocomplete="off" value={accountId()} onChange={setAccountId} />
+            <p class="text-12-regular text-text-weak">
+              Create a scoped Workers AI token with Workers AI Read and Edit. This form never estimates remaining Neurons.
+            </p>
+          </Show>
           <TextField label="Label (optional)" autocomplete="off" value={label()} onChange={setLabel} />
-          <Button type="submit" size="large" variant="primary" disabled={busy() || !key().trim()}>
+          <Button type="submit" size="large" variant="primary" disabled={busy() || !key().trim() || (requiresAccountId() && !accountId().trim())}>
             {busy() ? language.t("common.saving") : "Add API key"}
           </Button>
         </form>

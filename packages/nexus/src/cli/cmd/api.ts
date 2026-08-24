@@ -36,7 +36,18 @@ async function runWizard(): Promise<void> {
     })
     if (prompts.isCancel(result) || !result || !result.trim()) continue
     try {
-      vaultAddApiKey(provider, result.trim())
+      const accountId =
+        provider === "cloudflare-workers-ai"
+          ? await prompts.text({ message: "Cloudflare Account ID (required for Workers AI)", validate: (value) => (/^[a-f0-9]{32}$/i.test(value.trim()) ? undefined : "Enter the 32-character Account ID from Cloudflare") })
+          : undefined
+      if (prompts.isCancel(accountId)) continue
+      vaultAddApiKey(
+        provider,
+        result.trim(),
+        "default",
+        "cli",
+        provider === "cloudflare-workers-ai" ? { accountId: String(accountId).trim() } : undefined,
+      )
       saved++
       prompts.log.success(`${label} saved (${maskApiKey(result.trim())})`)
     } catch (error) {
@@ -53,12 +64,13 @@ const AddCommand = cmd({
     yargs
       .positional("provider", {
         describe:
-          "provider id/alias (openai, anthropic, claude, gemini, groq, openrouter, xai/grok, deepseek, mistral, together, perplexity, cohere, fireworks, kimi, cerebras) — omit for wizard",
+          "provider id/alias (openai, anthropic, claude, gemini, groq, openrouter, cloudflare/workers-ai, xai/grok, deepseek, mistral, together, perplexity, cohere, fireworks, kimi, cerebras) — omit for wizard",
         type: "string",
       })
       .positional("key", { type: "string", describe: "API key" })
-      .positional("label", { type: "string", describe: "optional label" }),
-  async handler(args: { provider?: string; key?: string; label?: string }) {
+      .positional("label", { type: "string", describe: "optional label" })
+      .option("account-id", { type: "string", describe: "required Cloudflare Account ID for cloudflare-workers-ai" }),
+  async handler(args: { provider?: string; key?: string; label?: string; accountId?: string }) {
     if (!args.provider) {
       await runWizard()
       return
@@ -69,8 +81,15 @@ const AddCommand = cmd({
       return
     }
     try {
-      const entry = vaultAddApiKey(args.provider, args.key, args.label)
-      const label = resolveProviderLabel(normalizeProvider(args.provider) ?? args.provider.toLowerCase())
+      const provider = normalizeProvider(args.provider)
+      const entry = vaultAddApiKey(
+        args.provider,
+        args.key,
+        args.label,
+        "cli",
+        provider === "cloudflare-workers-ai" ? { accountId: args.accountId ?? "" } : undefined,
+      )
+      const label = resolveProviderLabel(provider ?? args.provider.toLowerCase())
       process.stdout.write(`✓ ${label} key saved (${entry.label})\n`)
       process.stdout.write(`  Vault: ${apiVaultKeyPath()}\n`)
       process.stdout.write(`  Stored: ${maskApiKey(entry.key)}\n`)
@@ -120,8 +139,9 @@ const CheckCommand = cmd({
     process.stdout.write("Checking API keys (secrets remain masked)...\n")
     for (const row of rows) {
       const vault = (await import("../../api/ApiVault")).loadApiVault()
-      const rawKey = vault.providers[row.provider]?.[row.index - 1]?.key ?? ""
-      const result = await checkKey(row.provider, rawKey)
+      const rawEntry = vault.providers[row.provider]?.[row.index - 1]
+      const rawKey = rawEntry?.key ?? ""
+      const result = await checkKey(row.provider, rawKey, rawEntry?.metadata)
       const suffix = result.code ? ` HTTP ${result.code}` : ""
       process.stdout.write(`${result.status === "active" ? "✓" : result.status === "rate_limited" ? "!" : "✗"} ${row.provider} #${row.index} ${row.label} ${row.key} — ${result.status}${suffix}\n`)
       if (rawKey) {

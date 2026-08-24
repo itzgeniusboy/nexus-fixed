@@ -8,6 +8,31 @@
 
 export type AuthStyle = "bearer" | "x-api-key" | "query"
 
+export interface ProviderMetadataField {
+  /** Stable metadata key retained locally alongside a vault entry. */
+  key: "accountId"
+  /** Field label used by the CLI and Ctrl+P onboarding form. */
+  label: string
+  /** Short, non-secret setup guidance. */
+  description: string
+  /** The provider cannot make requests without this field. */
+  required: boolean
+}
+
+export interface CuratedProviderModel {
+  id: string
+  name: string
+  context: number
+  output: number
+  toolCall: boolean
+  reasoning: boolean
+  input: Array<"text" | "image">
+}
+
+export type ProviderValidation =
+  | { kind: "models" }
+  | { kind: "cloudflare-run"; model: string; payload: Record<string, unknown> }
+
 export interface ProviderContract {
   /** Canonical vault/provider id used across CLI, vault, and routing. */
   id: string
@@ -15,7 +40,7 @@ export interface ProviderContract {
   label: string
   /** Convenience aliases accepted by `nexus api add` etc. */
   aliases?: string[]
-  /** GET endpoint used for key validation and model discovery. */
+  /** GET endpoint used for standard key validation and model discovery. */
   modelsEndpoint: string
   /** True when the model listing is public and therefore cannot validate a key. */
   modelsEndpointPublic?: boolean
@@ -29,6 +54,12 @@ export interface ProviderContract {
   npm: string
   /** Well-known environment variable names checked for this provider. */
   env: string[]
+  /** Extra non-secret fields needed for a provider-specific runtime route. */
+  metadata?: ProviderMetadataField[]
+  /** Validation strategy when a provider does not have a usable generic models endpoint. */
+  validation?: ProviderValidation
+  /** Conservative supported model metadata used when no dynamic model listing is available. */
+  curatedModels?: CuratedProviderModel[]
 }
 
 export const PROVIDER_CONTRACTS: Record<string, ProviderContract> = {
@@ -175,6 +206,72 @@ export const PROVIDER_CONTRACTS: Record<string, ProviderContract> = {
     baseURL: "https://api.moonshot.cn/v1",
     npm: "@ai-sdk/openai-compatible",
     env: ["MOONSHOT_API_KEY"],
+  },
+  "cloudflare-workers-ai": {
+    id: "cloudflare-workers-ai",
+    label: "Cloudflare Workers AI",
+    aliases: ["cloudflare", "workers-ai"],
+    // Workers AI does not expose a generic account-scoped OpenAI /models route.
+    // Validation uses the documented account-scoped Run endpoint below instead.
+    modelsEndpoint: "https://api.cloudflare.com/client/v4",
+    auth: "bearer",
+    baseURL: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
+    npm: "@ai-sdk/openai-compatible",
+    env: ["CLOUDFLARE_API_KEY"],
+    metadata: [
+      {
+        key: "accountId",
+        label: "Cloudflare Account ID",
+        description: "Find it on the Cloudflare Workers AI page. It is required with the scoped API token.",
+        required: true,
+      },
+    ],
+    validation: {
+      kind: "cloudflare-run",
+      model: "@cf/meta/llama-3.1-8b-instruct",
+      payload: {
+        messages: [{ role: "user", content: "Reply with OK." }],
+        max_tokens: 1,
+      },
+    },
+    curatedModels: [
+      {
+        id: "@cf/meta/llama-3.1-8b-instruct",
+        name: "Llama 3.1 8B Instruct",
+        context: 128000,
+        output: 8192,
+        toolCall: false,
+        reasoning: false,
+        input: ["text"],
+      },
+      {
+        id: "@cf/qwen/qwen2.5-coder-32b-instruct",
+        name: "Qwen 2.5 Coder 32B Instruct",
+        context: 32768,
+        output: 8192,
+        toolCall: false,
+        reasoning: false,
+        input: ["text"],
+      },
+      {
+        id: "@cf/meta/llama-3.2-11b-vision-instruct",
+        name: "Llama 3.2 11B Vision Instruct",
+        context: 128000,
+        output: 8192,
+        toolCall: false,
+        reasoning: false,
+        input: ["text", "image"],
+      },
+      {
+        id: "@cf/qwen/qwq-32b",
+        name: "QwQ 32B",
+        context: 32768,
+        output: 8192,
+        toolCall: false,
+        reasoning: true,
+        input: ["text"],
+      },
+    ],
   },
 }
 

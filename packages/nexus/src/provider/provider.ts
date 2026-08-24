@@ -39,8 +39,14 @@ import {
   modelForProvider,
   PREFERRED_MODELS,
 } from "./rotation"
-import { apiVaultKeyEntries, getApiVaultStatus, verifyAllVaultKeys, getCachedKeyStatus } from "../api/ApiVault"
-import { PROVIDER_CONTRACTS } from "../api/providers"
+import {
+  apiVaultKeyEntries,
+  apiVaultMetadataForKey,
+  getApiVaultStatus,
+  verifyAllVaultKeys,
+  getCachedKeyStatus,
+} from "../api/ApiVault"
+import { PROVIDER_CONTRACTS, contractFor } from "../api/providers"
 
 function mergeApiVaultKeys(configured: unknown): Record<string, string[]> {
   const result: Record<string, string[]> = {}
@@ -78,17 +84,18 @@ type LocalFallbackProvider = {
   models: Record<string, ModelsDev.Model>
 }
 
-function localFallbackModel(id: string): ModelsDev.Model {
+function localFallbackModel(id: string, providerID?: string): ModelsDev.Model {
+  const curated = providerID ? contractFor(providerID)?.curatedModels?.find((model) => model.id === id) : undefined
   return {
     id,
-    name: id,
+    name: curated?.name ?? id,
     release_date: "",
-    attachment: false,
-    reasoning: false,
+    attachment: curated?.input.includes("image") ?? false,
+    reasoning: curated?.reasoning ?? false,
     temperature: true,
-    tool_call: true,
-    limit: { context: 128000, output: 8192 },
-    modalities: { input: ["text"], output: ["text"] },
+    tool_call: curated?.toolCall ?? true,
+    limit: { context: curated?.context ?? 128000, output: curated?.output ?? 8192 },
+    modalities: { input: curated?.input ?? ["text"], output: ["text"] },
   }
 }
 
@@ -119,7 +126,7 @@ export function withLocalFallbackCatalog(
     if (configuredProviderKeys(apiKeys, providerID).length === 0) continue
     const existing = result[providerID]
     const models = Object.fromEntries(
-      PREFERRED_MODELS[providerID as keyof typeof PREFERRED_MODELS].map((id) => [id, localFallbackModel(id)]),
+      PREFERRED_MODELS[providerID as keyof typeof PREFERRED_MODELS].map((id) => [id, localFallbackModel(id, providerID)]),
     )
     result[providerID] = {
       ...(existing ?? definition),
@@ -893,7 +900,13 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
 
       const auth = yield* dep.auth(input.id)
       const env = yield* dep.env()
-      const accountId = env["CLOUDFLARE_ACCOUNT_ID"] || (auth?.type === "api" ? auth.metadata?.accountId : undefined)
+      const vaultEntry = apiVaultKeyEntries().find(
+        (entry) => entry.provider === "cloudflare-workers-ai" && Boolean(entry.entry.metadata?.accountId),
+      )
+      const accountId =
+        env["CLOUDFLARE_ACCOUNT_ID"] ||
+        (auth?.type === "api" ? auth.metadata?.accountId : undefined) ||
+        vaultEntry?.entry.metadata?.accountId
       if (!accountId)
         return {
           autoload: false,
@@ -907,9 +920,10 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       const apiKey = env["CLOUDFLARE_API_KEY"] || (auth?.type === "api" ? auth.key : undefined)
 
       return {
-        autoload: !!apiKey,
+        autoload: !!(apiKey || vaultEntry?.entry.key),
         options: {
-          apiKey,
+          ...(apiKey ? { apiKey } : {}),
+          baseURL: "https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/v1",
           headers: {
             "User-Agent": `nexus/${InstallationVersion} cloudflare-workers-ai (${os.platform()} ${os.release()}; ${os.arch()})`,
           },
@@ -917,9 +931,13 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         async getModel(sdk: any, modelID: string) {
           return sdk.languageModel(modelID)
         },
-        vars(_options) {
+        vars(options) {
+          const selectedKey = typeof options.apiKey === "string" ? options.apiKey : undefined
+          const selectedAccountId = selectedKey
+            ? apiVaultMetadataForKey("cloudflare-workers-ai", selectedKey)?.accountId
+            : undefined
           return {
-            CLOUDFLARE_ACCOUNT_ID: accountId,
+            CLOUDFLARE_ACCOUNT_ID: selectedAccountId || accountId,
           }
         },
       }
@@ -1878,6 +1896,10 @@ const layer = Layer.effect(
         const provider = s.providers[model.providerID]
         const options = { ...provider.options }
 
+        const rotatedKey = s.rotation.next(model.providerID)
+        if (options["apiKey"] === undefined && rotatedKey) options["apiKey"] = rotatedKey
+        if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key
+
         if (
           model.providerID === "google-vertex" &&
           model.api.npm === "@ai-sdk/google-vertex/anthropic" &&
@@ -1920,9 +1942,6 @@ const layer = Layer.effect(
         })
 
         if (baseURL !== undefined) options["baseURL"] = baseURL
-        const rotatedKey = s.rotation.next(model.providerID)
-        if (options["apiKey"] === undefined && rotatedKey) options["apiKey"] = rotatedKey
-        if (options["apiKey"] === undefined && provider.key) options["apiKey"] = provider.key
         if (model.headers)
           options["headers"] = {
             ...options["headers"],

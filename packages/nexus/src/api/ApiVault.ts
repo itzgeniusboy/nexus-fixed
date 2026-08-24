@@ -25,6 +25,8 @@ export interface ApiKeyEntry {
   cooldownUntil?: string
   lastFailure?: "rate_limited" | "invalid" | "unknown"
   lastLatencyMs?: number
+  /** Provider-specific non-secret metadata; it is not returned in public vault rows. */
+  metadata?: Record<string, string>
 }
 
 export interface ProviderUsage {
@@ -58,7 +60,33 @@ function parseObject(source: string): Record<string, unknown> {
   }
 }
 
-function normalizeEntry(value: unknown): ApiKeyEntry | undefined {
+function storedMetadata(providerInput: string, value: unknown): Record<string, string> | undefined {
+  const contract = contractFor(providerInput)
+  if (!contract?.metadata?.length || !value || typeof value !== "object") return undefined
+  const raw = value as Record<string, unknown>
+  const metadata: Record<string, string> = {}
+  for (const field of contract.metadata) {
+    const candidate = raw[field.key]
+    if (typeof candidate === "string" && candidate.trim()) metadata[field.key] = candidate.trim()
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined
+}
+
+function validatedMetadata(providerInput: string, value?: Record<string, string>): Record<string, string> | undefined {
+  const contract = contractFor(providerInput)
+  if (!contract?.metadata?.length) return undefined
+  const metadata = storedMetadata(providerInput, value)
+  for (const field of contract.metadata) {
+    const candidate = metadata?.[field.key]
+    if (field.required && !candidate) throw new Error(`${field.label} is required for ${contract.label}`)
+    if (field.key === "accountId" && candidate && !/^[a-f0-9]{32}$/i.test(candidate)) {
+      throw new Error("Cloudflare Account ID must be a 32-character hexadecimal value")
+    }
+  }
+  return metadata
+}
+
+function normalizeEntry(value: unknown, provider: string): ApiKeyEntry | undefined {
   if (!value || typeof value !== "object") return undefined
   const item = value as Record<string, unknown>
   if (typeof item.key !== "string" || !item.key.trim()) return undefined
@@ -84,6 +112,7 @@ function normalizeEntry(value: unknown): ApiKeyEntry | undefined {
     ...(typeof item.lastLatencyMs === "number" && Number.isFinite(item.lastLatencyMs) && item.lastLatencyMs >= 0
       ? { lastLatencyMs: Math.round(item.lastLatencyMs) }
       : {}),
+    ...(storedMetadata(provider, item.metadata) ? { metadata: storedMetadata(provider, item.metadata) } : {}),
   }
 }
 
@@ -94,7 +123,7 @@ function normalizeVault(value: Record<string, unknown>): ApiVaultData {
   for (const [provider, entries] of Object.entries(rawProviders)) {
     if (!Array.isArray(entries)) continue
     providers[provider.toLowerCase()] = entries
-      .map(normalizeEntry)
+      .map((entry) => normalizeEntry(entry, provider.toLowerCase()))
       .filter((entry): entry is ApiKeyEntry => Boolean(entry))
   }
   const usage: Record<string, ProviderUsage> = {}
@@ -163,14 +192,29 @@ export function maskApiKey(key: string): string {
   return `${value.slice(0, Math.min(7, value.length - 3))}***${value.slice(-3)}`
 }
 
-export function ensureApiKey(providerInput: string, key: string, label = "auth"): ApiKeyEntry | undefined {
+export function ensureApiKey(
+  providerInput: string,
+  key: string,
+  label = "auth",
+  metadata?: Record<string, string>,
+): ApiKeyEntry | undefined {
   const provider = normalizeProvider(providerInput)
   const value = key.trim()
   if (!provider || !value) return undefined
+  let validMetadata: Record<string, string> | undefined
+  try {
+    validMetadata = validatedMetadata(provider, metadata)
+  } catch {
+    return undefined
+  }
   const vault = loadApiVault()
   const entries = vault.providers[provider] ?? []
   const existing = entries.find((entry) => entry.key === value)
-  if (existing) return existing
+  if (existing) {
+    if (validMetadata) existing.metadata = validMetadata
+    saveApiVault(vault)
+    return existing
+  }
   const entry: ApiKeyEntry = {
     key: value,
     label: label.trim() || "auth",
@@ -178,6 +222,7 @@ export function ensureApiKey(providerInput: string, key: string, label = "auth")
     status: "unknown",
     failures: 0,
     source: "auth",
+    ...(validMetadata ? { metadata: validMetadata } : {}),
   }
   vault.providers[provider] = [...entries, entry]
   saveApiVault(vault)
@@ -189,10 +234,12 @@ export function addApiKey(
   key: string,
   label = "default",
   source: ApiKeySource = "cli",
+  metadata?: Record<string, string>,
 ): ApiKeyEntry {
   const provider = normalizeProvider(providerInput)
   if (!provider) throw new Error(`Unsupported provider: ${providerInput}. Supported: ${API_PROVIDERS.join(", ")}`)
   if (!key.trim()) throw new Error("API key cannot be empty")
+  const validMetadata = validatedMetadata(provider, metadata)
   const vault = loadApiVault()
   const entries = vault.providers[provider] ?? []
   const existing = entries.find((entry) => entry.key === key.trim())
@@ -201,6 +248,7 @@ export function addApiKey(
     existing.source ??= source
     existing.status = "active"
     existing.failures = 0
+    if (validMetadata) existing.metadata = validMetadata
     saveApiVault(vault)
     return existing
   }
@@ -211,6 +259,7 @@ export function addApiKey(
     status: "active",
     failures: 0,
     source,
+    ...(validMetadata ? { metadata: validMetadata } : {}),
   }
   vault.providers[provider] = [...entries, entry]
   saveApiVault(vault)
@@ -432,6 +481,7 @@ function modelNames(value: unknown): string[] {
 export async function discoverProviderModels(
   providerInput: string,
   key: string,
+  metadata?: Record<string, string>,
 ): Promise<{ status: ApiKeyStatus; models: string[]; code?: number }> {
   const provider = normalizeProvider(providerInput)
   const contract = contractFor(providerInput)
@@ -439,6 +489,15 @@ export async function discoverProviderModels(
   const cacheKey = `${provider}:${key}`
   const cached = discoveredModelsCache.get(cacheKey)
   if (cached && cached.expiresAt > Date.now()) return { status: "active", models: cached.models }
+  if (contract.validation?.kind === "cloudflare-run") {
+    const checked = await checkKey(provider, key, metadata)
+    if (checked.status !== "active") {
+      return { status: checked.status, models: [], ...(checked.code ? { code: checked.code } : {}) }
+    }
+    const models = contract.curatedModels?.map((model) => model.id) ?? []
+    discoveredModelsCache.set(cacheKey, { expiresAt: Date.now() + 2 * 60 * 1000, models })
+    return { status: "active", models, ...(checked.code ? { code: checked.code } : {}) }
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
   try {
@@ -461,6 +520,14 @@ export async function discoverProviderModels(
 export function apiVaultKeyEntries(): Array<{ provider: string; entry: ApiKeyEntry }> {
   const vault = loadApiVault()
   return Object.entries(vault.providers).flatMap(([provider, entries]) => entries.map((entry) => ({ provider, entry })))
+}
+
+/** Returns non-secret metadata only for an exact local key; public vault rows never include it. */
+export function apiVaultMetadataForKey(providerInput: string, key: string): Record<string, string> | undefined {
+  const provider = normalizeProvider(providerInput)
+  if (!provider || !key.trim()) return undefined
+  const entry = (loadApiVault().providers[provider] ?? []).find((candidate) => candidate.key === key.trim())
+  return entry?.metadata ? { ...entry.metadata } : undefined
 }
 
 export function setAutoRotation(enabled: boolean): void {
@@ -497,7 +564,11 @@ function authHeadersFor(contract: ProviderContract, key: string): Record<string,
   return { Authorization: `Bearer ${key}`, ...(contract.headers ?? {}) }
 }
 
-export async function checkKey(providerInput: string, key: string): Promise<{ status: ApiKeyStatus; code?: number; latencyMs?: number }> {
+export async function checkKey(
+  providerInput: string,
+  key: string,
+  metadata?: Record<string, string>,
+): Promise<{ status: ApiKeyStatus; code?: number; latencyMs?: number }> {
   const provider = normalizeProvider(providerInput)
   const contract = contractFor(providerInput)
   if (!provider || !contract) return { status: "unknown" }
@@ -505,6 +576,23 @@ export async function checkKey(providerInput: string, key: string): Promise<{ st
   const timer = setTimeout(() => controller.abort(), 8000)
   const startedAt = Date.now()
   try {
+    if (contract.validation?.kind === "cloudflare-run") {
+      const accountId = metadata?.accountId
+      if (!accountId || !/^[a-f0-9]{32}$/i.test(accountId)) return { status: "unknown" }
+      const response = await fetch(
+        `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(accountId)}/ai/run/${encodeURIComponent(contract.validation.model)}`,
+        {
+          method: "POST",
+          headers: { ...authHeadersFor(contract, key), "Content-Type": "application/json" },
+          body: JSON.stringify(contract.validation.payload),
+          signal: controller.signal,
+        },
+      )
+      const latencyMs = Date.now() - startedAt
+      if (!response.ok) return { status: validationStatusForResponse(contract, response.status), code: response.status, latencyMs }
+      const payload = (await response.json().catch(() => undefined)) as { success?: unknown } | undefined
+      return { status: payload?.success === false ? "unknown" : "active", code: response.status, latencyMs }
+    }
     const headers = authHeadersFor(contract, key)
     const url =
       contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
@@ -518,6 +606,12 @@ export async function checkKey(providerInput: string, key: string): Promise<{ st
 }
 
 export function validationStatusForResponse(contract: ProviderContract, status: number): ApiKeyStatus {
+  if (contract.validation?.kind === "cloudflare-run") {
+    if (status >= 200 && status < 300) return "active"
+    if (status === 401 || status === 403) return "invalid"
+    if (status === 429) return "rate_limited"
+    return "unknown"
+  }
   if (status >= 200 && status < 300) return contract.modelsEndpointPublic ? "unknown" : "active"
   if (status === 400 || status === 401 || status === 403) return "invalid"
   if (status === 429) return "rate_limited"
@@ -561,7 +655,7 @@ export async function verifyAllVaultKeys(configured: Record<string, string[]> = 
 
         tasks.push(
           (async () => {
-            const { status } = await checkKey(prov, entry.key)
+            const { status } = await checkKey(prov, entry.key, entry.metadata)
             if (status !== "unknown") updateApiKeyStatus(prov, entry.key, status)
           })(),
         )

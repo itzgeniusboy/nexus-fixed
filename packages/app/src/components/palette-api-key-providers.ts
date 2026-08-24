@@ -2,6 +2,7 @@ export type NexusApiKeyProvider = {
   id:
     | "groq"
     | "openrouter"
+    | "cloudflare-workers-ai"
     | "deepseek"
     | "gemini"
     | "cerebras"
@@ -22,6 +23,7 @@ export type NexusApiKeyProvider = {
 export const NEXUS_API_KEY_PROVIDERS: NexusApiKeyProvider[] = [
   { id: "groq", name: "Groq" },
   { id: "openrouter", name: "OpenRouter" },
+  { id: "cloudflare-workers-ai", name: "Cloudflare Workers AI" },
   { id: "deepseek", name: "DeepSeek" },
   { id: "gemini", name: "Gemini" },
   { id: "cerebras", name: "Cerebras" },

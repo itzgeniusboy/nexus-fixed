@@ -60,6 +60,9 @@ const ProviderVaultKey = Schema.Struct({
   added: Schema.String,
   lastChecked: Schema.optional(Schema.String),
   suspendedUntil: Schema.optional(Schema.String),
+  cooldownUntil: Schema.optional(Schema.String),
+  lastFailure: Schema.optional(Schema.Union([Schema.Literal("rate_limited"), Schema.Literal("invalid"), Schema.Literal("unknown")])),
+  lastLatencyMs: Schema.optional(Schema.Number),
   todayRequests: Schema.Number,
   todayInputTokens: Schema.Number,
   todayOutputTokens: Schema.Number,
@@ -88,6 +91,11 @@ const AddProviderKeyInput = Schema.Struct({
   provider: Schema.String,
   key: Schema.String,
   label: Schema.optional(Schema.String),
+  metadata: Schema.optional(
+    Schema.Struct({
+      accountId: Schema.optional(Schema.String),
+    }),
+  ),
 })
 
 export const ProviderApi = HttpApi.make("provider")
