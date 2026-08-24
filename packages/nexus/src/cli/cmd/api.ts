@@ -11,6 +11,7 @@ import {
   maskApiKey,
   normalizeProvider,
   removeApiKey as vaultRemoveApiKey,
+  recordApiKeyLatency,
   setAutoRotation,
   updateApiKeyStatus,
   type ApiKeyStatus,
@@ -93,9 +94,15 @@ const ListCommand = cmd({
       process.stdout.write("No API keys stored. Add one with: nexus api add <provider> <key> [label]\n")
       return
     }
-    process.stdout.write("Provider\t#\tLabel\tKey\tStatus\tToday\n")
+    process.stdout.write("Provider\t#\tLabel\tKey\tStatus\tHealth\tToday\n")
     for (const row of rows) {
-      process.stdout.write(`${row.provider}\t${row.index}\t${row.label}\t${row.key}\t${row.status}\t${row.usage.todayRequests} req / ${row.usage.todayInputTokens + row.usage.todayOutputTokens} tok\n`)
+      const cooling = row.cooldownUntil && Date.parse(row.cooldownUntil) > Date.now()
+      const health = [
+        cooling ? "cooldown" : undefined,
+        row.lastFailure ? `last:${row.lastFailure}` : undefined,
+        row.lastLatencyMs !== undefined ? `${row.lastLatencyMs}ms` : undefined,
+      ].filter(Boolean).join(",") || "—"
+      process.stdout.write(`${row.provider}\t${row.index}\t${row.label}\t${row.key}\t${row.status}\t${health}\t${row.usage.todayRequests} req / ${row.usage.todayInputTokens + row.usage.todayOutputTokens} tok\n`)
     }
   },
 })
@@ -117,7 +124,10 @@ const CheckCommand = cmd({
       const result = await checkKey(row.provider, rawKey)
       const suffix = result.code ? ` HTTP ${result.code}` : ""
       process.stdout.write(`${result.status === "active" ? "✓" : result.status === "rate_limited" ? "!" : "✗"} ${row.provider} #${row.index} ${row.label} ${row.key} — ${result.status}${suffix}\n`)
-      if (rawKey) updateApiKeyStatus(row.provider, rawKey, result.status, result)
+      if (rawKey) {
+        updateApiKeyStatus(row.provider, rawKey, result.status, result)
+        if (result.latencyMs !== undefined) recordApiKeyLatency(row.provider, rawKey, result.latencyMs)
+      }
     }
   },
 })

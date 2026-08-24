@@ -22,6 +22,9 @@ export interface ApiKeyEntry {
   source?: ApiKeySource
   suspendedUntil?: string
   lastChecked?: string
+  cooldownUntil?: string
+  lastFailure?: "rate_limited" | "invalid" | "unknown"
+  lastLatencyMs?: number
 }
 
 export interface ProviderUsage {
@@ -74,6 +77,13 @@ function normalizeEntry(value: unknown): ApiKeyEntry | undefined {
     ...(source ? { source } : {}),
     ...(typeof item.suspendedUntil === "string" ? { suspendedUntil: item.suspendedUntil } : {}),
     ...(typeof item.lastChecked === "string" ? { lastChecked: item.lastChecked } : {}),
+    ...(typeof item.cooldownUntil === "string" ? { cooldownUntil: item.cooldownUntil } : {}),
+    ...(item.lastFailure === "rate_limited" || item.lastFailure === "invalid" || item.lastFailure === "unknown"
+      ? { lastFailure: item.lastFailure }
+      : {}),
+    ...(typeof item.lastLatencyMs === "number" && Number.isFinite(item.lastLatencyMs) && item.lastLatencyMs >= 0
+      ? { lastLatencyMs: Math.round(item.lastLatencyMs) }
+      : {}),
   }
 }
 
@@ -259,6 +269,8 @@ export function updateApiKeyStatus(providerInput: string, key: string, status: A
       status: failures >= 3 && status !== "active" ? "suspended" : status,
       failures,
       lastChecked: new Date().toISOString(),
+      ...(status === "rate_limited" ? { cooldownUntil: cooldownUntil(failures) } : {}),
+      ...(status === "rate_limited" || status === "invalid" || status === "unknown" ? { lastFailure: status } : {}),
       ...(failures >= 3 && status !== "active"
         ? { suspendedUntil: new Date(Date.now() + 60 * 60 * 1000).toISOString() }
         : {}),
@@ -270,14 +282,36 @@ export function updateApiKeyStatus(providerInput: string, key: string, status: A
   if (status === "active") {
     entry.failures = 0
     delete entry.suspendedUntil
+    delete entry.cooldownUntil
+    delete entry.lastFailure
   } else if (status === "rate_limited" || status === "invalid") {
     entry.failures += 1
+    entry.lastFailure = status
+    if (status === "rate_limited") entry.cooldownUntil = cooldownUntil(entry.failures)
     if (entry.failures >= 3) {
       entry.status = "suspended"
       entry.suspendedUntil = new Date(Date.now() + 60 * 60 * 1000).toISOString()
     }
   }
   void error
+  saveApiVault(vault)
+  invalidateCachedVaultStatus()
+}
+
+function cooldownUntil(failures: number): string {
+  const minutes = Math.min(30, Math.max(5, 5 * Math.max(1, failures)))
+  return new Date(Date.now() + minutes * 60 * 1000).toISOString()
+}
+
+/** Stores redacted, local health evidence only; it never persists provider responses or secret material. */
+export function recordApiKeyLatency(providerInput: string, key: string, latencyMs: number): void {
+  const provider = normalizeProvider(providerInput)
+  if (!provider || !Number.isFinite(latencyMs) || latencyMs < 0) return
+  const vault = loadApiVault()
+  const entry = (vault.providers[provider] ?? []).find((candidate) => candidate.key === key)
+  if (!entry) return
+  entry.lastLatencyMs = Math.round(latencyMs)
+  entry.lastChecked = new Date().toISOString()
   saveApiVault(vault)
   invalidateCachedVaultStatus()
 }
@@ -299,7 +333,14 @@ export function availableApiKeys(providerInput: string): ApiKeyEntry[] {
   if (!provider) return []
   const now = Date.now()
   const vault = loadApiVault()
-  return (vault.providers[provider] ?? []).filter((entry) => {
+  const entries = vault.providers[provider] ?? []
+  const healthyAvailable = entries.some((entry) => {
+    if (entry.status === "invalid") return false
+    if (entry.status === "suspended" && entry.suspendedUntil && Date.parse(entry.suspendedUntil) > now) return false
+    return !entry.cooldownUntil || Date.parse(entry.cooldownUntil) <= now
+  })
+  return entries.filter((entry) => {
+    if (entry.cooldownUntil && Date.parse(entry.cooldownUntil) > now && healthyAvailable) return false
     if (entry.status !== "suspended") return true
     return !entry.suspendedUntil || Date.parse(entry.suspendedUntil) <= now
   })
@@ -312,6 +353,9 @@ export function apiVaultRows(): Array<{
   key: string
   status: ApiKeyStatus
   usage: ProviderUsage
+  cooldownUntil?: string
+  lastFailure?: ApiKeyEntry["lastFailure"]
+  lastLatencyMs?: number
 }> {
   const vault = loadApiVault()
   return Object.entries(vault.providers).flatMap(([provider, entries]) =>
@@ -322,6 +366,9 @@ export function apiVaultRows(): Array<{
       key: maskApiKey(entry.key),
       status: entry.status,
       usage: vault.usage[provider] ?? { todayRequests: 0, todayInputTokens: 0, todayOutputTokens: 0 },
+      ...(entry.cooldownUntil ? { cooldownUntil: entry.cooldownUntil } : {}),
+      ...(entry.lastFailure ? { lastFailure: entry.lastFailure } : {}),
+      ...(entry.lastLatencyMs !== undefined ? { lastLatencyMs: entry.lastLatencyMs } : {}),
     })),
   )
 }
@@ -339,6 +386,9 @@ export function apiVaultPublicRows() {
       added: entry.added,
       ...(entry.lastChecked ? { lastChecked: entry.lastChecked } : {}),
       ...(entry.suspendedUntil ? { suspendedUntil: entry.suspendedUntil } : {}),
+      ...(entry.cooldownUntil ? { cooldownUntil: entry.cooldownUntil } : {}),
+      ...(entry.lastFailure ? { lastFailure: entry.lastFailure } : {}),
+      ...(entry.lastLatencyMs !== undefined ? { lastLatencyMs: entry.lastLatencyMs } : {}),
       todayRequests: vault.usage[provider]?.todayRequests ?? 0,
       todayInputTokens: vault.usage[provider]?.todayInputTokens ?? 0,
       todayOutputTokens: vault.usage[provider]?.todayOutputTokens ?? 0,
@@ -447,18 +497,19 @@ function authHeadersFor(contract: ProviderContract, key: string): Record<string,
   return { Authorization: `Bearer ${key}`, ...(contract.headers ?? {}) }
 }
 
-export async function checkKey(providerInput: string, key: string): Promise<{ status: ApiKeyStatus; code?: number }> {
+export async function checkKey(providerInput: string, key: string): Promise<{ status: ApiKeyStatus; code?: number; latencyMs?: number }> {
   const provider = normalizeProvider(providerInput)
   const contract = contractFor(providerInput)
   if (!provider || !contract) return { status: "unknown" }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), 8000)
+  const startedAt = Date.now()
   try {
     const headers = authHeadersFor(contract, key)
     const url =
       contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
     const response = await fetch(url, { headers, signal: controller.signal })
-    return { status: validationStatusForResponse(contract, response.status), code: response.status }
+    return { status: validationStatusForResponse(contract, response.status), code: response.status, latencyMs: Date.now() - startedAt }
   } catch {
     return { status: "unknown" }
   } finally {

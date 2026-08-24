@@ -14,9 +14,10 @@ import { useSDK } from "./sdk"
 import { useSync } from "./sync"
 import { useServerSDK } from "./server-sdk"
 import { ScopedKey, type ServerScope } from "@/utils/server-scope"
+import { classifyTaskRequirements, type AutoModelRequirements } from "./auto-model"
 
 export type ModelKey = { providerID: string; modelID: string; variant?: string }
-export type AutoModelRequirements = { tools?: boolean; vision?: boolean }
+export type { AutoModelRequirements } from "./auto-model"
 
 type State = {
   agent?: string
@@ -237,10 +238,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         () => agent.current()?.model,
       )
 
-    const resolveAuto = (requirements: AutoModelRequirements = {}) => {
-      const supports = (item: NonNullable<ReturnType<typeof models.find>>) =>
-        (!requirements.tools || item.tool_call) &&
-        (!requirements.vision || item.attachment || item.modalities?.input?.includes("image"))
+      const resolveAuto = (requirements: AutoModelRequirements = {}) => {
+        const supports = (item: NonNullable<ReturnType<typeof models.find>>) =>
+        (!requirements.tools || item.capabilities.toolcall) &&
+        (!requirements.vision || item.capabilities.attachment || item.capabilities.input.image) &&
+        (!requirements.longContext || (item.limit?.context ?? 0) >= 64_000) &&
+        (!requirements.reasoning || item.capabilities.reasoning)
       const preferred = configuredModel() ?? defaultModel()
       const preferredItem = preferred ? models.find(preferred) : undefined
       if (preferredItem && supports(preferredItem)) return preferredItem
@@ -250,9 +253,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         .filter(supports)
         .sort((a, b) => {
           const score = (item: typeof a) =>
-            (item.tool_call ? 100_000 : 0) +
-            (item.attachment || item.modalities?.input?.includes("image") ? 10_000 : 0) +
-            (item.reasoning ? 1_000 : 0) +
+            (item.capabilities.toolcall ? 100_000 : 0) +
+            (item.capabilities.attachment || item.capabilities.input.image ? 10_000 : 0) +
+            (item.capabilities.reasoning ? 1_000 : 0) +
             Math.min(item.limit?.output ?? 0, 32_000)
           return score(b) - score(a) || a.name.localeCompare(b.name)
         })
@@ -311,6 +314,9 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       ready: models.ready,
       current,
       resolve,
+      resolveForTask(task: string) {
+        return resolve(classifyTaskRequirements(task))
+      },
       isAuto() {
         return !scope()?.model
       },

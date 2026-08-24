@@ -35,7 +35,7 @@ export class RotationEngine {
     
     const healthyCount = eligibleValues.filter(val => {
       const status = getCachedKeyStatus(val)
-      return !status || status.status !== "rate_limited"
+      return !status || (status.status !== "rate_limited" && (!status.cooldownUntil || Date.parse(status.cooldownUntil) <= now))
     }).length
 
     let position = this.positions.get(providerID) ?? 0
