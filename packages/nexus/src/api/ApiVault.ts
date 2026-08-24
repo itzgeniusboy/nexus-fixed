@@ -6,7 +6,9 @@ import { PROVIDER_CONTRACTS, REGISTRY_PROVIDER_IDS, contractFor, type ProviderCo
 export const API_PROVIDERS = REGISTRY_PROVIDER_IDS
 
 const PROVIDER_ALIASES: Record<string, string> = Object.fromEntries(
-  Object.values(PROVIDER_CONTRACTS).flatMap((contract) => (contract.aliases ?? []).map((alias) => [alias, contract.id])),
+  Object.values(PROVIDER_CONTRACTS).flatMap((contract) =>
+    (contract.aliases ?? []).map((alias) => [alias, contract.id]),
+  ),
 )
 export type ApiProvider = (typeof API_PROVIDERS)[number]
 export type ApiKeyStatus = "active" | "rate_limited" | "invalid" | "suspended" | "unknown"
@@ -36,9 +38,23 @@ export interface ProviderUsage {
   lastUsed?: string
 }
 
+/** Local NEXUS limits; never an asserted provider quota, balance, or price. */
+export interface ApiUsageBudget {
+  version: 1
+  maxRequestsPerTask?: number
+  maxTokensPerTask?: number
+  maxRequestsPerDay?: number
+  maxTokensPerDay?: number
+}
+
+export type ApiUsageBudgetDecision =
+  | { allowed: true }
+  | { allowed: false; reason: "task_request_cap" | "task_token_cap" | "daily_request_cap" | "daily_token_cap" }
+
 export interface ApiVaultData {
   providers: Record<string, ApiKeyEntry[]>
   usage: Record<string, ProviderUsage>
+  usageBudget: ApiUsageBudget
   autoRotate: boolean
   fallbackToLocal: boolean
 }
@@ -48,7 +64,7 @@ export const apiVaultPath = () => path.join(home(), ".nexus", "api-vault.json")
 export const apiUsagePath = () => path.join(home(), ".nexus", "api-usage.json")
 
 function emptyVault(): ApiVaultData {
-  return { providers: {}, usage: {}, autoRotate: true, fallbackToLocal: true }
+  return { providers: {}, usage: {}, usageBudget: { version: 1 }, autoRotate: true, fallbackToLocal: true }
 }
 
 function parseObject(source: string): Record<string, unknown> {
@@ -57,6 +73,27 @@ function parseObject(source: string): Record<string, unknown> {
     return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
   } catch {
     return {}
+  }
+}
+
+function positiveWhole(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const rounded = Math.round(value)
+  return rounded > 0 ? rounded : undefined
+}
+
+function normalizeUsageBudget(value: unknown): ApiUsageBudget {
+  const item = value && typeof value === "object" ? (value as Record<string, unknown>) : {}
+  const maxRequestsPerTask = positiveWhole(item.maxRequestsPerTask)
+  const maxTokensPerTask = positiveWhole(item.maxTokensPerTask)
+  const maxRequestsPerDay = positiveWhole(item.maxRequestsPerDay)
+  const maxTokensPerDay = positiveWhole(item.maxTokensPerDay)
+  return {
+    version: 1,
+    ...(maxRequestsPerTask ? { maxRequestsPerTask } : {}),
+    ...(maxTokensPerTask ? { maxTokensPerTask } : {}),
+    ...(maxRequestsPerDay ? { maxRequestsPerDay } : {}),
+    ...(maxTokensPerDay ? { maxTokensPerDay } : {}),
   }
 }
 
@@ -145,6 +182,7 @@ function normalizeVault(value: Record<string, unknown>): ApiVaultData {
   return {
     providers,
     usage,
+    usageBudget: normalizeUsageBudget(value.usageBudget),
     autoRotate: value.autoRotate !== false,
     fallbackToLocal: value.fallbackToLocal !== false,
   }
@@ -180,7 +218,10 @@ export function saveUsage(usage: Record<string, ProviderUsage>): void {
 }
 
 export function normalizeProvider(provider: string): ApiProvider | undefined {
-  const raw = provider.trim().toLowerCase().replace(/[\s_]+/g, "-")
+  const raw = provider
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_]+/g, "-")
   const normalized = PROVIDER_ALIASES[raw] ?? raw
   if (normalized === "google") return "gemini"
   return (API_PROVIDERS as readonly string[]).includes(normalized) ? (normalized as ApiProvider) : undefined
@@ -375,6 +416,57 @@ export function recordApiUsage(providerInput: string, inputTokens: number, outpu
   usage.lastUsed = new Date().toISOString()
   vault.usage[provider] = usage
   saveApiVault(vault)
+}
+
+/**
+ * Preflights user-configured local caps against NEXUS-observed usage. Dispatchers
+ * should stop before sending when this returns denied. It never guesses an account
+ * balance, quota, or monetary cost.
+ */
+export function checkApiUsageBudget(input: {
+  provider: string
+  taskRequests?: number
+  taskTokens?: number
+  nextRequests?: number
+  nextTokens?: number
+}): ApiUsageBudgetDecision {
+  const vault = loadApiVault()
+  const budget = vault.usageBudget
+  const taskRequests = Math.max(0, Math.round(input.taskRequests ?? 0))
+  const taskTokens = Math.max(0, Math.round(input.taskTokens ?? 0))
+  const nextRequests = Math.max(0, Math.round(input.nextRequests ?? 1))
+  const nextTokens = Math.max(0, Math.round(input.nextTokens ?? 0))
+  if (budget.maxRequestsPerTask !== undefined && taskRequests + nextRequests > budget.maxRequestsPerTask) {
+    return { allowed: false, reason: "task_request_cap" }
+  }
+  if (budget.maxTokensPerTask !== undefined && taskTokens + nextTokens > budget.maxTokensPerTask) {
+    return { allowed: false, reason: "task_token_cap" }
+  }
+  const provider = normalizeProvider(input.provider) ?? input.provider.toLowerCase()
+  const usage = vault.usage[provider]
+  const today = new Date().toISOString().slice(0, 10)
+  const isToday = usage?.lastUsed?.slice(0, 10) === today
+  const todayRequests = isToday ? (usage?.todayRequests ?? 0) : 0
+  const todayTokens = isToday ? (usage?.todayInputTokens ?? 0) + (usage?.todayOutputTokens ?? 0) : 0
+  if (budget.maxRequestsPerDay !== undefined && todayRequests + nextRequests > budget.maxRequestsPerDay) {
+    return { allowed: false, reason: "daily_request_cap" }
+  }
+  if (budget.maxTokensPerDay !== undefined && todayTokens + nextTokens > budget.maxTokensPerDay) {
+    return { allowed: false, reason: "daily_token_cap" }
+  }
+  return { allowed: true }
+}
+
+export function getApiUsageBudget(): ApiUsageBudget {
+  return { ...loadApiVault().usageBudget }
+}
+
+/** A zero or omitted field clears that optional local cap. */
+export function setApiUsageBudget(input: Partial<Omit<ApiUsageBudget, "version">>): ApiUsageBudget {
+  const vault = loadApiVault()
+  vault.usageBudget = normalizeUsageBudget({ ...vault.usageBudget, ...input })
+  saveApiVault(vault)
+  return { ...vault.usageBudget }
 }
 
 export function availableApiKeys(providerInput: string): ApiKeyEntry[] {
@@ -589,7 +681,8 @@ export async function checkKey(
         },
       )
       const latencyMs = Date.now() - startedAt
-      if (!response.ok) return { status: validationStatusForResponse(contract, response.status), code: response.status, latencyMs }
+      if (!response.ok)
+        return { status: validationStatusForResponse(contract, response.status), code: response.status, latencyMs }
       const payload = (await response.json().catch(() => undefined)) as { success?: unknown } | undefined
       return { status: payload?.success === false ? "unknown" : "active", code: response.status, latencyMs }
     }
@@ -597,7 +690,11 @@ export async function checkKey(
     const url =
       contract.auth === "query" ? `${contract.modelsEndpoint}?key=${encodeURIComponent(key)}` : contract.modelsEndpoint
     const response = await fetch(url, { headers, signal: controller.signal })
-    return { status: validationStatusForResponse(contract, response.status), code: response.status, latencyMs: Date.now() - startedAt }
+    return {
+      status: validationStatusForResponse(contract, response.status),
+      code: response.status,
+      latencyMs: Date.now() - startedAt,
+    }
   } catch {
     return { status: "unknown" }
   } finally {
