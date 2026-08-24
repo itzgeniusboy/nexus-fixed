@@ -31,6 +31,14 @@ import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import { RotationEngine } from "@/provider/rotation"
+import { recordApiUsage } from "@/api/ApiVault"
+import {
+  checkTaskUsageBudget,
+  emptyTaskUsage,
+  localBudgetFailure,
+  recordCompletedUsage,
+  type CompletedUsage,
+} from "./llm/budget"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -51,6 +59,7 @@ export type StreamInput = {
 
 export type StreamRequest = StreamInput & {
   abort: AbortSignal
+  onUsage?: (usage: CompletedUsage & { provider: string }) => void
 }
 
 export interface Interface {
@@ -293,6 +302,14 @@ const live: Layer.Layer<
               }),
             )
           },
+          onFinish(event) {
+            input.onUsage?.({
+              provider: input.model.providerID,
+              inputTokens: event.totalUsage.inputTokens,
+              outputTokens: event.totalUsage.outputTokens,
+              requests: event.steps.length,
+            })
+          },
           // Copilot returns the authoritative billed amount only in provider-specific response fields.
           includeRawChunks: input.model.providerID.includes("github-copilot"),
           async experimental_repairToolCall(failed) {
@@ -369,32 +386,39 @@ const live: Layer.Layer<
             const ModelRouter = yield* Effect.promise(() => import("@/api/ModelRouter"))
             const alias = ModelRouter.resolveModelAlias(input.model.id)
             const compatibleRoutes = ModelRouter.routeModel(alias, { includeLocal: false })
-            
+
             // Build the exact model candidates (same logical model, multiple providers)
             const exactCandidates: Array<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }> = []
             // Add the originally requested provider/model first
             exactCandidates.push({ providerID: input.model.providerID, modelID: input.model.id })
-            
+
             // Add other providers that can serve the exact same model alias
             for (const route of compatibleRoutes) {
               if (route.provider !== "ollama" && route.provider !== input.model.providerID) {
-                exactCandidates.push({ providerID: route.provider as ProviderV2.ID, modelID: route.model as ModelV2.ID })
+                exactCandidates.push({
+                  providerID: route.provider as ProviderV2.ID,
+                  modelID: route.model as ModelV2.ID,
+                })
               }
             }
-            
+
             // Filter alternatives to remove ones we already included in exactCandidates
-            const filteredAlternatives = alternatives.filter(alt => 
-              !exactCandidates.some(ec => ec.providerID === alt.providerID && ec.modelID === alt.modelID)
+            const filteredAlternatives = alternatives.filter(
+              (alt) => !exactCandidates.some((ec) => ec.providerID === alt.providerID && ec.modelID === alt.modelID),
             )
 
-            const candidates = [
-              ...exactCandidates,
-              ...filteredAlternatives,
-            ] as const
+            const candidates = [...exactCandidates, ...filteredAlternatives] as const
+            const taskUsage = emptyTaskUsage()
+            const onUsage = (usage: CompletedUsage & { provider: string }) => {
+              const observed = recordCompletedUsage(taskUsage, usage)
+              if (usage.provider !== "ollama") {
+                recordApiUsage(usage.provider, observed.inputTokens, observed.outputTokens, observed.requests)
+              }
+            }
 
             const toStream = (model: Provider.Model) =>
               Effect.gen(function* () {
-                const result = yield* run({ ...input, model, abort: ctrl.signal })
+                const result = yield* run({ ...input, model, abort: ctrl.signal, onUsage })
                 if (result.type === "native") return result.stream
 
                 // Adapter seam: both runtimes expose the same LLMEvent stream. Native
@@ -408,27 +432,40 @@ const live: Layer.Layer<
                 )
               })
 
-                        const attempt = (remaining: ReadonlyArray<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>, retryCount = 0): Effect.Effect<Stream.Stream<LLMEvent, unknown>> =>
+            const attempt = (
+              remaining: ReadonlyArray<{ providerID: ProviderV2.ID; modelID: ModelV2.ID }>,
+              retryCount = 0,
+            ): Effect.Effect<Stream.Stream<LLMEvent, unknown>> =>
               Effect.gen(function* () {
                 const [candidate, ...rest] = remaining
                 if (!candidate) return yield* Effect.dieMessage("No fallback model is available")
-                
+                const cap = checkTaskUsageBudget(candidate.providerID, taskUsage)
+                if (!cap.allowed) return yield* Effect.dieMessage(localBudgetFailure(cap.reason))
+
                 // Retry the same provider only while its active key rotation has
                 // untried keys. This prevents cycling back to key 1 before switching.
                 const nextFallback = (cause: unknown) => {
-                  let message = typeof cause === "string" ? cause : (cause instanceof Error ? cause.message : String(cause))
-                  try { message = Cause.pretty(cause as any) } catch (e) {}
+                  let message =
+                    typeof cause === "string" ? cause : cause instanceof Error ? cause.message : String(cause)
+                  try {
+                    message = Cause.pretty(cause as any)
+                  } catch (e) {}
                   if (!RotationEngine.isFallbackable(message)) return undefined
-                  
+
                   return Effect.gen(function* () {
                     const rateLimited = RotationEngine.isRateLimited(message)
-                    const credentialFailure = /invalid[_ -]?api[_ -]?key|api[_ -]?key.*(?:invalid|not valid)|(?:invalid|missing).*(?:authentication|credentials)|unauthorized|forbidden|missing authentication header|(?:status|http|error)?\s*[:(]?\s*(?:400|401|403)\b/i.test(
-                      message,
-                    )
+                    const credentialFailure =
+                      /invalid[_ -]?api[_ -]?key|api[_ -]?key.*(?:invalid|not valid)|(?:invalid|missing).*(?:authentication|credentials)|unauthorized|forbidden|missing authentication header|(?:status|http|error)?\s*[:(]?\s*(?:400|401|403)\b/i.test(
+                        message,
+                      )
                     const currentUsedKey = yield* provider.currentKey(candidate.providerID)
                     if (currentUsedKey && (rateLimited || credentialFailure)) {
                       const status = rateLimited ? "rate_limited" : "invalid"
-                      yield* Effect.promise(() => import("../api/ApiVault").then((m) => m.updateApiKeyStatus(candidate.providerID, currentUsedKey, status)))
+                      yield* Effect.promise(() =>
+                        import("../api/ApiVault").then((m) =>
+                          m.updateApiKeyStatus(candidate.providerID, currentUsedKey, status),
+                        ),
+                      )
                     }
                     yield* provider.invalidateLanguage(candidate.providerID, candidate.modelID)
                     const sameProviderKeyCount = yield* provider.rotationKeyCount(candidate.providerID)
@@ -441,7 +478,7 @@ const live: Layer.Layer<
                       })
                       return yield* attempt(remaining, retryCount + 1)
                     }
-                    
+
                     if (rest.length === 0) return yield* Effect.failCause(cause as Cause.Cause<unknown>)
                     const next = rest[0]
                     yield* Effect.logWarning("provider exhausted; switching model", {
@@ -460,11 +497,15 @@ const live: Layer.Layer<
                   return yield* Effect.failCause(modelExit.cause)
                 }
                 const current = yield* toStream(modelExit.value)
-                
+
                 // Hook to reset failures on success
                 const currentUsedKey = yield* provider.currentKey(candidate.providerID)
                 if (currentUsedKey) {
-                  yield* Effect.promise(() => import("../api/ApiVault").then((m) => m.updateApiKeyStatus(candidate.providerID, currentUsedKey, "active")))
+                  yield* Effect.promise(() =>
+                    import("../api/ApiVault").then((m) =>
+                      m.updateApiKeyStatus(candidate.providerID, currentUsedKey, "active"),
+                    ),
+                  )
                 }
 
                 return current.pipe(

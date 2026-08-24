@@ -406,11 +406,16 @@ export function recordApiKeyLatency(providerInput: string, key: string, latencyM
   invalidateCachedVaultStatus()
 }
 
-export function recordApiUsage(providerInput: string, inputTokens: number, outputTokens: number): void {
+export function recordApiUsage(
+  providerInput: string,
+  inputTokens: number,
+  outputTokens: number,
+  requestCount = 1,
+): void {
   const provider = normalizeProvider(providerInput) ?? providerInput.toLowerCase()
   const vault = loadApiVault()
   const usage = vault.usage[provider] ?? { todayRequests: 0, todayInputTokens: 0, todayOutputTokens: 0 }
-  usage.todayRequests += 1
+  usage.todayRequests += Math.max(1, Math.round(requestCount))
   usage.todayInputTokens += Math.max(0, Math.round(inputTokens))
   usage.todayOutputTokens += Math.max(0, Math.round(outputTokens))
   usage.lastUsed = new Date().toISOString()
