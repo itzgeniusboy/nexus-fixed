@@ -64,6 +64,14 @@ export type SkillRevision = {
   createdAt: number
 }
 
+export type MemorySyncPack = {
+  schemaVersion: 1
+  exportedAt: number
+  scope: Exclude<MemoryScope, "device">
+  scopeId: string
+  records: Array<Pick<MemoryRecord, "scope" | "scopeId" | "kind" | "content" | "confidence" | "sourceRunId" | "createdAt" | "updatedAt">>
+}
+
 export type AgentSchedule = {
   id: string
   name: string
@@ -420,6 +428,43 @@ export class AgentPlatformStore {
     })
     this.audit("memory.replaced", "memory", id, { replacementId: replacement.id })
     return replacement
+  }
+
+  exportMemorySyncPack(scope: Exclude<MemoryScope, "device">, scopeId: string): MemorySyncPack {
+    const records = this.listMemory(scope, scopeId).map((memory) => ({
+      scope: memory.scope,
+      scopeId: memory.scopeId,
+      kind: memory.kind,
+      content: memory.content,
+      confidence: memory.confidence,
+      sourceRunId: memory.sourceRunId,
+      createdAt: memory.createdAt,
+      updatedAt: memory.updatedAt,
+    }))
+    const pack: MemorySyncPack = { schemaVersion: 1, exportedAt: now(), scope, scopeId, records }
+    this.audit("memory.sync_exported", "memory_scope", `${scope}:${scopeId}`, { records: records.length })
+    return pack
+  }
+
+  importMemorySyncPack(pack: MemorySyncPack) {
+    if (pack.schemaVersion !== 1) throw new Error("Unsupported memory sync pack version")
+    if ((pack.scope !== "project" && pack.scope !== "channel") || !pack.scopeId.trim()) throw new Error("Memory sync packs may contain only selected project or channel scopes")
+    if (!Array.isArray(pack.records)) throw new Error("Invalid memory sync pack records")
+    const imported: MemoryRecord[] = []
+    for (const item of pack.records) {
+      if (item.scope !== pack.scope || item.scopeId !== pack.scopeId) throw new Error("Memory sync pack contains a mismatched scope")
+      if (!["fact", "preference", "decision", "summary", "instruction"].includes(item.kind)) throw new Error("Memory sync pack contains an unsupported memory kind")
+      imported.push(this.addMemory({
+        scope: item.scope,
+        scopeId: item.scopeId,
+        kind: item.kind,
+        content: item.content,
+        sourceRunId: item.sourceRunId,
+        confidence: item.confidence,
+      }))
+    }
+    this.audit("memory.sync_imported", "memory_scope", `${pack.scope}:${pack.scopeId}`, { records: imported.length, exportedAt: pack.exportedAt })
+    return imported
   }
 
   proposeLearning(input: { runId: string; title: string; summary: string; skillDraft: string; evidence?: string[] }) {

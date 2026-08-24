@@ -10,7 +10,7 @@ import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
-import { AgentPlatformStore, type GatewayChannel, type GatewayRuntimeMode, type LearningStatus, type MemoryKind, type MemoryScope } from "../../agent-platform/store"
+import { AgentPlatformStore, type GatewayChannel, type GatewayRuntimeMode, type LearningStatus, type MemoryKind, type MemoryScope, type MemorySyncPack } from "../../agent-platform/store"
 import { clearLocalGatewayState, defaultLocalGatewayStatePath, gatewayCredentialName, isLocalGatewayProcessRunning, pollTelegramOnce, readLocalGatewayState, startLocalGatewayServer, type GatewayCredentialKind } from "../../agent-platform/gateway-local"
 import { planGatewayRun } from "../../agent-platform/gateway"
 import { SecretStore } from "@nexus-ai/assistant/core/secret-store"
@@ -265,18 +265,34 @@ const AgentMemoryCommand = cmd({
   describe: "manage local, redacted, cross-session agent memory",
   builder: (yargs: Argv) =>
     yargs
-      .positional("operation", { choices: ["add", "list", "search", "replace", "delete"] as const, describe: "memory operation" })
+      .positional("operation", { choices: ["add", "list", "search", "replace", "delete", "export", "import"] as const, describe: "memory operation" })
       .positional("query", { type: "string", array: true, describe: "search text" })
       .option("content", { type: "string", describe: "memory text for add" })
       .option("scope", { choices: ["device", "project", "channel"] as const, default: "device", describe: "memory visibility scope" })
       .option("scope-id", { type: "string", default: "default", describe: "scope identifier" })
       .option("kind", { choices: ["fact", "preference", "decision", "summary", "instruction"] as const, default: "fact", describe: "memory classification" })
-      .option("confidence", { type: "number", default: 0.8, describe: "confidence from 0 to 1" }),
+      .option("confidence", { type: "number", default: 0.8, describe: "confidence from 0 to 1" })
+      .option("file", { type: "string", describe: "manual redacted memory sync-pack path for export or import" }),
   async handler(args: any) {
     const store = new AgentPlatformStore()
     try {
       const scope = args.scope as MemoryScope
       const scopeId = args.scopeId as string
+      if (args.operation === "export" || args.operation === "import") {
+        if (!args.file) throw new Error("Memory sync requires --file <path>")
+        if (scope === "device") throw new Error("Device-scoped memory cannot be synced. Select --scope project or --scope channel explicitly.")
+        if (args.operation === "export") {
+          const pack = store.exportMemorySyncPack(scope, scopeId)
+          await fs.writeFile(args.file, JSON.stringify(pack, null, 2) + "\n", "utf8")
+          process.stdout.write(`Exported ${pack.records.length} redacted ${scope}:${scopeId} memory record(s) to ${args.file}. The pack contains no API vault keys, credentials, browser data, shell history, or project files.${EOL}`)
+          return
+        }
+        const pack = JSON.parse(await fs.readFile(args.file, "utf8")) as MemorySyncPack
+        if (pack.scope !== scope || pack.scopeId !== scopeId) throw new Error(`Sync pack scope must match the explicit --scope ${scope} --scope-id ${scopeId} selection`)
+        const imported = store.importMemorySyncPack(pack)
+        process.stdout.write(`Imported ${imported.length} redacted ${scope}:${scopeId} memory record(s) from ${args.file}. Existing exact records were deduplicated.${EOL}`)
+        return
+      }
       if (args.operation === "add") {
         if (!args.content) throw new Error("Memory content required. Use: nexus agent memory add --content \"...\"")
         const memory = store.addMemory({ scope, scopeId, kind: args.kind as MemoryKind, content: args.content, confidence: args.confidence })
