@@ -243,6 +243,25 @@ export function RunFooterView(props: RunFooterViewProps) {
   const busy = createMemo(() => props.state().phase === "running")
   const armed = createMemo(() => props.state().interrupt > 0)
   const exiting = createMemo(() => props.state().exit > 0)
+  const [completed, setCompleted] = createSignal(false)
+  let wasBusy = false
+  let completedTimer: ReturnType<typeof setTimeout> | undefined
+  createEffect(() => {
+    const nowBusy = busy()
+    if (nowBusy) {
+      if (completedTimer) clearTimeout(completedTimer)
+      completedTimer = undefined
+      setCompleted(false)
+    } else if (wasBusy) {
+      setCompleted(true)
+      if (completedTimer) clearTimeout(completedTimer)
+      completedTimer = setTimeout(() => {
+        completedTimer = undefined
+        setCompleted(false)
+      }, 3000)
+    }
+    wasBusy = nowBusy
+  })
   const queue = createMemo(() => props.state().queue)
   const usage = createMemo(() => props.state().usage)
   const interruptLabel = createMemo(() => {
@@ -423,6 +442,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       exiting: exiting(),
       armed: armed(),
       status: stateStatus(),
+      completed: completed(),
     }),
   )
   const activityColor = createMemo(() => {
@@ -510,6 +530,7 @@ export function RunFooterView(props: RunFooterViewProps) {
 
   onCleanup(() => {
     props.onRequestExit?.(undefined)
+    if (completedTimer) clearTimeout(completedTimer)
   })
 
   useBindings(() => ({

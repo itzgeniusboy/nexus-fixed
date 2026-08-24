@@ -19,4 +19,11 @@ describe("Termux footer activity", () => {
       deriveFooterActivity({ busy: false, exiting: false, armed: false, status: "permission requested" }),
     ).toMatchObject({ label: "Waiting for approval", pulse: false })
   })
+
+  test("shows completion only when the footer observes a real completed run", () => {
+    expect(
+      deriveFooterActivity({ busy: false, exiting: false, armed: false, status: "", completed: true }),
+    ).toMatchObject({ label: "Completed", tone: "muted", pulse: false })
+    expect(deriveFooterActivity({ busy: false, exiting: false, armed: false, status: "" })).toBeUndefined()
+  })
 })

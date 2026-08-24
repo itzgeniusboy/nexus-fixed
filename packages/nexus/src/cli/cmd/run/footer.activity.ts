@@ -12,6 +12,7 @@ export function deriveFooterActivity(input: {
   exiting: boolean
   armed: boolean
   status: string
+  completed?: boolean
 }): FooterActivity | undefined {
   if (input.exiting) return { glyph: "!", label: "Exiting", tone: "error", pulse: false }
   if (input.armed) return { glyph: "‖", label: "Interrupt ready", tone: "warning", pulse: true }
@@ -23,6 +24,7 @@ export function deriveFooterActivity(input: {
   if (status.includes("permission") || status.includes("approval") || status.includes("question")) {
     return { glyph: "‖", label: "Waiting for approval", tone: "warning", pulse: false }
   }
+  if (input.completed) return { glyph: "✓", label: "Completed", tone: "muted", pulse: false }
   if (!input.busy) return
   if (status.includes("test")) return { glyph: "✓", label: "Testing", tone: "active", pulse: true }
   if (/(read|grep|glob|search|scan|list|find)/.test(status)) {
