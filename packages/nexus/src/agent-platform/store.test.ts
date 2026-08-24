@@ -62,12 +62,21 @@ describe("AgentPlatformStore", () => {
     const store = makeStore()
     expect(() => store.registerGatewayConnection({ channel: "telegram", label: "personal", credentialRef: "12345:raw-token", allowedSenders: ["user-1"] })).toThrow("credential://")
     const connection = store.registerGatewayConnection({ channel: "telegram", label: "personal", credentialRef: "credential://telegram/personal", allowedSenders: ["user-1"] })
+    expect(connection.runtimeMode).toBe("local")
     expect(store.reserveGatewayEvent({ connectionId: connection.id, eventId: "42", senderId: "user-1", conversationId: "chat-1" })).toEqual({ accepted: false, reason: "connection_disabled" })
     store.setGatewayConnectionEnabled(connection.id, true)
     expect(store.reserveGatewayEvent({ connectionId: connection.id, eventId: "42", senderId: "user-2", conversationId: "chat-1" })).toEqual({ accepted: false, reason: "sender_not_allowed" })
     expect(planGatewayRun(store, { schemaVersion: 1, connectionId: connection.id, eventId: "42", senderId: "user-1", conversationId: "chat-1" }).run?.mode).toBe("channel")
     expect(store.reserveGatewayEvent({ connectionId: connection.id, eventId: "42", senderId: "user-1", conversationId: "chat-1" })).toEqual({ accepted: false, reason: "duplicate" })
     expect(store.listRuns()).toHaveLength(1)
+    store.close()
+  })
+
+  test("keeps a hosted gateway profile opt-in instead of making it the local default", () => {
+    const store = makeStore()
+    const connection = store.registerGatewayConnection({ channel: "discord", label: "custom-host", runtimeMode: "hosted", credentialRef: "credential://discord/custom-host", allowedSenders: ["owner"] })
+    expect(connection.runtimeMode).toBe("hosted")
+    expect(store.listGatewayConnections()[0]?.runtimeMode).toBe("hosted")
     store.close()
   })
 

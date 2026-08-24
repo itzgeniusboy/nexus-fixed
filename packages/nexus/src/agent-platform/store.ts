@@ -5,7 +5,7 @@ import { dirname, join } from "node:path"
 import { Global } from "@nexus-ai/core/global"
 import { redactSensitive } from "@nexus-ai/assistant/core/redact"
 
-export const AGENT_PLATFORM_SCHEMA_VERSION = 2
+export const AGENT_PLATFORM_SCHEMA_VERSION = 3
 
 export type MemoryScope = "device" | "project" | "channel"
 export type MemoryKind = "fact" | "preference" | "decision" | "summary" | "instruction"
@@ -67,10 +67,12 @@ export type AgentSchedule = {
 }
 
 export type GatewayChannel = "telegram" | "discord" | "slack"
+export type GatewayRuntimeMode = "local" | "hosted"
 export type GatewayConnection = {
   id: string
   channel: GatewayChannel
   label: string
+  runtimeMode: GatewayRuntimeMode
   credentialRef: string
   allowedSenders: string[]
   enabled: boolean
@@ -152,6 +154,7 @@ function decodeGatewayConnection(row: Record<string, unknown>): GatewayConnectio
     id: String(row.id),
     channel: row.channel as GatewayChannel,
     label: String(row.label),
+    runtimeMode: row.runtime_mode as GatewayRuntimeMode,
     credentialRef: String(row.credential_ref),
     allowedSenders: JSON.parse(String(row.allowed_senders_json)) as string[],
     enabled: asBoolean(row.enabled),
@@ -328,6 +331,10 @@ export class AgentPlatformStore {
       );
       PRAGMA user_version = 2;
     `)
+    if (version < 3) this.db.exec(`
+      ALTER TABLE agent_adapter_connection ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'local';
+      PRAGMA user_version = 3;
+    `)
   }
 
   addMemory(input: Omit<MemoryRecord, "id" | "content" | "createdAt" | "updatedAt" | "status"> & { content: string }) {
@@ -488,7 +495,7 @@ export class AgentPlatformStore {
     this.audit(input.enabled ? "schedule.enabled" : "schedule.disabled", "schedule", id, {})
   }
 
-  registerGatewayConnection(input: { channel: GatewayChannel; label: string; credentialRef: string; allowedSenders: string[] }) {
+  registerGatewayConnection(input: { channel: GatewayChannel; label: string; credentialRef: string; allowedSenders: string[]; runtimeMode?: GatewayRuntimeMode }) {
     const timestamp = now()
     const label = input.label.trim()
     const allowedSenders = [...new Set(input.allowedSenders.map((sender) => sender.trim()).filter(Boolean))]
@@ -499,15 +506,16 @@ export class AgentPlatformStore {
       id: randomUUID(),
       channel: input.channel,
       label,
+      runtimeMode: input.runtimeMode ?? "local",
       credentialRef,
       allowedSenders,
       enabled: false,
       createdAt: timestamp,
       updatedAt: timestamp,
     }
-    this.db.query("INSERT INTO agent_adapter_connection (id, channel, label, credential_ref, allowed_senders_json, enabled, time_created, time_updated) VALUES (?, ?, ?, ?, ?, 0, ?, ?)")
-      .run(connection.id, connection.channel, connection.label, connection.credentialRef, JSON.stringify(connection.allowedSenders), timestamp, timestamp)
-    this.audit("gateway.connection_registered", "adapter_connection", connection.id, { channel: connection.channel, enabled: false })
+    this.db.query("INSERT INTO agent_adapter_connection (id, channel, label, runtime_mode, credential_ref, allowed_senders_json, enabled, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)")
+      .run(connection.id, connection.channel, connection.label, connection.runtimeMode, connection.credentialRef, JSON.stringify(connection.allowedSenders), timestamp, timestamp)
+    this.audit("gateway.connection_registered", "adapter_connection", connection.id, { channel: connection.channel, runtimeMode: connection.runtimeMode, enabled: false })
     return connection
   }
 

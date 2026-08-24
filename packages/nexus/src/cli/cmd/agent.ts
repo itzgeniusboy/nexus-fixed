@@ -10,7 +10,10 @@ import { EOL } from "os"
 import type { Argv } from "yargs"
 import { Effect } from "effect"
 import { effectCmd } from "../effect-cmd"
-import { AgentPlatformStore, type GatewayChannel, type LearningStatus, type MemoryKind, type MemoryScope } from "../../agent-platform/store"
+import { AgentPlatformStore, type GatewayChannel, type GatewayRuntimeMode, type LearningStatus, type MemoryKind, type MemoryScope } from "../../agent-platform/store"
+import { clearLocalGatewayState, defaultLocalGatewayStatePath, gatewayCredentialName, isLocalGatewayProcessRunning, pollTelegramOnce, readLocalGatewayState, startLocalGatewayServer, type GatewayCredentialKind } from "../../agent-platform/gateway-local"
+import { planGatewayRun } from "../../agent-platform/gateway"
+import { SecretStore } from "@nexus-ai/assistant/core/secret-store"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -383,16 +386,102 @@ const AgentGatewayCommand = cmd({
   describe: "register opt-in channel metadata and inspect gateway connection state; no raw bot token is accepted",
   builder: (yargs: Argv) =>
     yargs
-      .positional("operation", { choices: ["register", "list", "enable", "disable"] as const, describe: "gateway operation" })
-      .positional("id", { type: "string", describe: "connection id for enable or disable" })
+      .positional("operation", { choices: ["register", "list", "enable", "disable", "credential-set", "local-start", "local-status", "local-stop", "telegram-poll"] as const, describe: "gateway operation" })
+      .positional("id", { type: "string", describe: "connection id for enable, disable, credential-set, or telegram-poll" })
       .option("channel", { choices: ["telegram", "discord", "slack"] as const, describe: "target chat platform" })
       .option("label", { type: "string", describe: "connection label" })
+      .option("mode", { choices: ["local", "hosted"] as const, default: "local", describe: "local foreground mode by default; hosted is an explicit custom profile" })
       .option("credential-ref", { type: "string", describe: "opaque server credential reference such as credential://telegram/personal" })
       .option("allowed-sender", { type: "string", array: true, describe: "explicitly authorized channel sender id; repeat for each owner" })
+      .option("kind", { choices: ["telegram-bot-token", "telegram-webhook-secret", "slack-signing-secret", "discord-public-key"] as const, describe: "credential material class for credential-set" })
+      .option("port", { type: "number", default: 8787, describe: "loopback-only local listener port for local-start" })
       .option("confirm", { type: "boolean", default: false, describe: "explicitly confirm connection enablement or disablement" }),
   async handler(args: any) {
     const store = new AgentPlatformStore()
     try {
+      if (args.operation === "credential-set") {
+        if (!args.id || !args.kind) throw new Error("Credential setup requires a connection id and --kind")
+        const connection = store.listGatewayConnections().find((item) => item.id === args.id)
+        if (!connection) throw new Error(`Gateway connection not found: ${args.id}`)
+        const kind = args.kind as GatewayCredentialKind
+        const secret = await prompts.password({ message: `Enter ${kind} for ${connection.channel}; it is encrypted locally and never echoed` })
+        if (prompts.isCancel(secret)) throw new UI.CancelledError()
+        if (!secret?.trim()) throw new Error("Credential value cannot be empty")
+        SecretStore.setSecret(gatewayCredentialName(connection.id, kind), secret.trim())
+        process.stdout.write(`Encrypted local credential material saved for ${connection.id}. No token was added to command history.${EOL}`)
+        return
+      }
+      if (args.operation === "local-status") {
+        const state = readLocalGatewayState()
+        if (!state) process.stdout.write("No foreground local gateway state is recorded." + EOL)
+        else if (!isLocalGatewayProcessRunning(state.pid)) {
+          clearLocalGatewayState()
+          process.stdout.write("Removed stale local gateway state; no foreground gateway process is running." + EOL)
+        } else process.stdout.write(`Local gateway recorded at http://${state.host}:${state.port} (pid ${state.pid}). It runs only while that user-started process remains alive.${EOL}`)
+        return
+      }
+      if (args.operation === "local-stop") {
+        if (!args.confirm) throw new Error("Stopping a local gateway requires --confirm")
+        const state = readLocalGatewayState()
+        if (!state) {
+          process.stdout.write("No foreground local gateway state is recorded." + EOL)
+          return
+        }
+        if (!isLocalGatewayProcessRunning(state.pid)) {
+          clearLocalGatewayState()
+          process.stdout.write(`Removed stale local gateway state for non-running process ${state.pid}.${EOL}`)
+          return
+        }
+        try {
+          process.kill(state.pid, "SIGTERM")
+          process.stdout.write(`Stop signal sent to local gateway process ${state.pid}.${EOL}`)
+        } catch {
+          throw new Error(`Local gateway process ${state.pid} is not running; remove only a confirmed-stale state file at ${defaultLocalGatewayStatePath()}`)
+        }
+        return
+      }
+      if (args.operation === "local-start") {
+        const runtime = await startLocalGatewayServer({
+          store,
+          port: args.port,
+          credentialFor: (connectionId, kind) => SecretStore.getSecret(gatewayCredentialName(connectionId, kind)),
+        })
+        process.stdout.write(`Local gateway listening only at http://${runtime.state.host}:${runtime.state.port}. It is a foreground process; press Ctrl+C to stop it. No boot service or public tunnel was created.${EOL}`)
+        await new Promise<void>((resolve) => {
+          const close = () => runtime.close().finally(resolve)
+          process.once("SIGINT", close)
+          process.once("SIGTERM", close)
+        })
+        return
+      }
+      if (args.operation === "telegram-poll") {
+        if (!args.id) throw new Error("Telegram polling requires a local Telegram connection id")
+        const connection = store.listGatewayConnections().find((item) => item.id === args.id)
+        if (!connection || connection.channel !== "telegram" || connection.runtimeMode !== "local") throw new Error("Telegram polling requires an enabled local Telegram connection")
+        if (!connection.enabled) throw new Error("Enable this Telegram connection with --confirm before polling")
+        const token = SecretStore.getSecret(gatewayCredentialName(connection.id, "telegram-bot-token"))
+        if (!token) throw new Error(`No encrypted Telegram bot token is stored. Use: nexus agent gateway credential-set ${connection.id} --kind telegram-bot-token`)
+        let offset: number | undefined
+        let stopped = false
+        const stop = () => { stopped = true }
+        process.once("SIGINT", stop)
+        process.once("SIGTERM", stop)
+        process.stdout.write(`Polling Telegram in the foreground for local connection ${connection.id}. Press Ctrl+C to stop; no background service was created.${EOL}`)
+        try {
+          while (!stopped) {
+            const result = await pollTelegramOnce({
+              token,
+              offset,
+              onUpdate: (event) => planGatewayRun(store, { schemaVersion: 1, connectionId: connection.id, ...event }),
+            })
+            offset = result.nextOffset
+          }
+        } finally {
+          process.off("SIGINT", stop)
+          process.off("SIGTERM", stop)
+        }
+        return
+      }
       if (args.operation === "register") {
         if (!args.channel || !args.label || !args.credentialRef || !(args.allowedSender as string[] | undefined)?.length) {
           throw new Error("Gateway registration requires --channel, --label, --credential-ref, and at least one --allowed-sender")
@@ -400,10 +489,11 @@ const AgentGatewayCommand = cmd({
         const connection = store.registerGatewayConnection({
           channel: args.channel as GatewayChannel,
           label: args.label,
+          runtimeMode: args.mode as GatewayRuntimeMode,
           credentialRef: args.credentialRef,
           allowedSenders: args.allowedSender as string[],
         })
-        process.stdout.write(`Gateway connection ${connection.id} registered disabled for ${connection.channel}. Store the bot/app secret in the server credential store, not this command.${EOL}`)
+        process.stdout.write(`Gateway connection ${connection.id} registered disabled for ${connection.channel} in ${connection.runtimeMode} mode. Store the bot/app secret in encrypted local storage or the chosen hosted credential store, not this command.${EOL}`)
         return
       }
       if (args.operation === "enable" || args.operation === "disable") {
@@ -415,7 +505,7 @@ const AgentGatewayCommand = cmd({
       }
       const connections = store.listGatewayConnections()
       if (!connections.length) process.stdout.write("No gateway connections registered" + EOL)
-      for (const connection of connections) process.stdout.write(`${connection.id}\t${connection.channel}\t${connection.enabled ? "enabled" : "disabled"}\t${connection.label}\tallowed=${connection.allowedSenders.length}${EOL}`)
+      for (const connection of connections) process.stdout.write(`${connection.id}\t${connection.channel}\t${connection.runtimeMode}\t${connection.enabled ? "enabled" : "disabled"}\t${connection.label}\tallowed=${connection.allowedSenders.length}${EOL}`)
     } catch (error) {
       platformError(error)
     } finally {

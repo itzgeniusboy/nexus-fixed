@@ -68,6 +68,12 @@ The local CLI may create a schedule definition, but it cannot cause a persistent
 
 Cross-device synchronization is opt-in by memory scope. The owner selects a device, project, or channel scope and starts a one-time sync handshake. Each memory record retains source device, version, content hash, and tombstone state. Conflict resolution is append-only: a newer conflicting fact creates a superseding revision rather than erasing history. The gateway never synchronizes API-vault keys, credential store values, browser data, local shell history, or arbitrary project files.
 
+## Default local mode and optional hosted mode
+
+NEXUS creates gateway connections in **local** mode by default. A local gateway listens only on `127.0.0.1` or `::1`, is started explicitly in the foreground by its user, writes a private runtime-state file, and stops on `Ctrl+C` or a deliberate stop command. It never installs a boot receiver, wake lock, permanent daemon, public tunnel, or paid service. For a local Telegram bot, the user stores its token through the encrypted interactive credential prompt and starts `nexus agent gateway telegram-poll <connection-id>`; the foreground poller uses Telegram's documented `getUpdates` path and turns only allowed, deduplicated updates into bounded NEXUS run plans. Discord and Slack require a reachable signed HTTP endpoint for live interactions, so they remain suitable for the opt-in hosted profile or an owner-managed reverse proxy.[1] [2] [3]
+
+A connection becomes **hosted** only when its owner explicitly selects that profile during registration. That profile is metadata and deployment guidance—not an implicit hosting purchase or remote process. Its credential reference must point to the deployment's own server-side credential store. A local listener refuses to serve a hosted connection, preventing accidental cross-mode activation.
+
 ## Deployment choices
 
 The same gateway contracts support two operational modes. A user-started local gateway is useful for development and requires the computer or Termux environment to stay awake. A hosted gateway is required for reliable 24×7 public webhooks and scheduled automation. The hosted service needs HTTPS, a durable database, server-side secret storage, controlled deployment logs, and an explicit owner-controlled enable/disable switch per channel.
