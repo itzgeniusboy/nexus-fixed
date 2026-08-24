@@ -9,13 +9,23 @@ import { cmd } from "./cmd"
 import * as Prompt from "../effect/prompt"
 import { Config } from "@/config/config"
 import { isTextGenerationCandidate, modelForProvider } from "@/provider/rotation"
+import { getDeviceConfig } from "@nexus-ai/core/device"
+import { formatLocalModelRecommendations } from "./local-models"
 
 function failureSummary(error: unknown): string {
   const message = String(error)
-  if (/getaddrinfo|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timeout|network|transport/i.test(message)) return "Network/DNS unavailable"
-  if (/401|403|unauthorized|forbidden|invalid.*(?:api.?key|credential)|api.?key.*(?:not valid|invalid)|authentication/i.test(message)) return "Authentication failed"
-  if (/429|rate.?limit|too many requests|quota exceeded|freeusagelimit/i.test(message)) return "Rate limited/quota exhausted"
-  if (/404|model.*(?:not found|does not exist)|not found.*model|unsupported model/i.test(message)) return "Model unavailable"
+  if (/getaddrinfo|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|timeout|network|transport/i.test(message))
+    return "Network/DNS unavailable"
+  if (
+    /401|403|unauthorized|forbidden|invalid.*(?:api.?key|credential)|api.?key.*(?:not valid|invalid)|authentication/i.test(
+      message,
+    )
+  )
+    return "Authentication failed"
+  if (/429|rate.?limit|too many requests|quota exceeded|freeusagelimit/i.test(message))
+    return "Rate limited/quota exhausted"
+  if (/404|model.*(?:not found|does not exist)|not found.*model|unsupported model/i.test(message))
+    return "Model unavailable"
   if (/5\d\d|server error|service unavailable/i.test(message)) return "Provider server error"
   return "Request failed"
 }
@@ -26,11 +36,14 @@ function normalizeConfiguredProvider(providerID: string): string {
 
 function configuredModelIDs(cfg: Record<string, any>, providerID: string): string[] {
   const normalized = normalizeConfiguredProvider(providerID)
-  const providerConfig = cfg.provider?.[providerID] ?? cfg.provider?.[normalized] ?? (normalized === "google" ? cfg.provider?.gemini : undefined)
+  const providerConfig =
+    cfg.provider?.[providerID] ??
+    cfg.provider?.[normalized] ??
+    (normalized === "google" ? cfg.provider?.gemini : undefined)
   const models = providerConfig?.models
   if (!models || typeof models !== "object" || Array.isArray(models)) return []
   return Object.keys(models)
-    .map((id) => id.includes("/") && id.split("/")[0] === normalized ? id.slice(normalized.length + 1) : id)
+    .map((id) => (id.includes("/") && id.split("/")[0] === normalized ? id.slice(normalized.length + 1) : id))
     .filter((id) => id.length > 0)
 }
 
@@ -43,7 +56,8 @@ function configuredModelTarget(cfg: Record<string, any>): Array<{ providerID: st
   }
   if (typeof cfg.model === "string" && cfg.model.includes("/")) {
     const [providerID, ...parts] = cfg.model.split("/")
-    if (parts.length > 0) targets.unshift({ providerID: normalizeConfiguredProvider(providerID), modelID: parts.join("/") })
+    if (parts.length > 0)
+      targets.unshift({ providerID: normalizeConfiguredProvider(providerID), modelID: parts.join("/") })
   }
   return targets
 }
@@ -130,7 +144,18 @@ export const ModelsTestCommand = effectCmd({
     }
 
     const testPrompt = "Reply with exactly OK"
-    const providersToTest = Array.from(new Set(["groq", "openrouter", "google", "ollama", "openai", "opencode", ...configured, ...configuredTargets.map((item) => item.providerID)]))
+    const providersToTest = Array.from(
+      new Set([
+        "groq",
+        "openrouter",
+        "google",
+        "ollama",
+        "openai",
+        "opencode",
+        ...configured,
+        ...configuredTargets.map((item) => item.providerID),
+      ]),
+    )
     const tested = new Set<string>()
 
     for (const pid of providersToTest) {
@@ -141,20 +166,21 @@ export const ModelsTestCommand = effectCmd({
       if (!provider) continue
       // Do not issue requests for cloud providers that have no configured key.
       // Ollama is local and is the sole intentional exception.
-      if (
-        pid !== "ollama" &&
-        (yield* s.rotationKeyCount(ProviderV2.ID.make(pid))) === 0 &&
-        !provider.key
-      ) continue
+      if (pid !== "ollama" && (yield* s.rotationKeyCount(ProviderV2.ID.make(pid))) === 0 && !provider.key) continue
 
       const configuredIDs = configuredModelIDs(cfg, pid)
-      const targets = configuredIDs.length > 0
-        ? configuredIDs.map((modelID) => provider.models[modelID]).filter((item): item is NonNullable<typeof item> => Boolean(item))
-        : []
+      const targets =
+        configuredIDs.length > 0
+          ? configuredIDs
+              .map((modelID) => provider.models[modelID])
+              .filter((item): item is NonNullable<typeof item> => Boolean(item))
+          : []
       const preferredID = modelForProvider(pid, provider.models)
       const fallbackModel = preferredID
         ? provider.models[preferredID]
-        : Provider.sort(Object.values(provider.models).filter((item) => isTextGenerationCandidate(pid, item.id, item)))[0]
+        : Provider.sort(
+            Object.values(provider.models).filter((item) => isTextGenerationCandidate(pid, item.id, item)),
+          )[0]
       const models = targets.length > 0 ? targets : fallbackModel ? [fallbackModel] : []
       for (const model of models) {
         if (!isTextGenerationCandidate(pid, model.id, model)) continue
@@ -170,7 +196,9 @@ export const ModelsTestCommand = effectCmd({
           const errStr = String(language.cause)
           const summary = failureSummary(errStr)
           yield* spinner.stop(
-            (summary === "Rate limited/quota exhausted" ? UI.Style.TEXT_WARNING_BOLD + "! " : UI.Style.TEXT_DANGER_BOLD + "✗ ") +
+            (summary === "Rate limited/quota exhausted"
+              ? UI.Style.TEXT_WARNING_BOLD + "! "
+              : UI.Style.TEXT_DANGER_BOLD + "✗ ") +
               UI.Style.TEXT_NORMAL +
               label +
               ` (${summary})` +
@@ -194,7 +222,9 @@ export const ModelsTestCommand = effectCmd({
           const errStr = String(result.cause)
           const summary = failureSummary(errStr)
           yield* spinner.stop(
-            (summary === "Rate limited/quota exhausted" ? UI.Style.TEXT_WARNING_BOLD + "! " : UI.Style.TEXT_DANGER_BOLD + "✗ ") +
+            (summary === "Rate limited/quota exhausted"
+              ? UI.Style.TEXT_WARNING_BOLD + "! "
+              : UI.Style.TEXT_DANGER_BOLD + "✗ ") +
               UI.Style.TEXT_NORMAL +
               label +
               ` (${summary})` +
@@ -205,12 +235,21 @@ export const ModelsTestCommand = effectCmd({
     }
 
     yield* Prompt.outro("Test complete")
-  })
+  }),
+})
+
+export const ModelsLocalCommand = cmd({
+  command: "local",
+  describe: "show conservative local-model recommendations; this never downloads or runs a model",
+  handler() {
+    process.stdout.write(formatLocalModelRecommendations(getDeviceConfig()).join(EOL) + EOL)
+  },
 })
 
 export const ModelsCommand = cmd({
   command: "models",
   describe: "manage available models",
-  builder: (yargs) => yargs.command(ModelsListCommand).command(ModelsTestCommand).demandCommand(),
+  builder: (yargs) =>
+    yargs.command(ModelsListCommand).command(ModelsTestCommand).command(ModelsLocalCommand).demandCommand(),
   async handler() {},
 })
