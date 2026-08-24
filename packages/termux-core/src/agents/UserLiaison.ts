@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { promisify } from "node:util"
 import { SeniorDevAgent } from "./SeniorDevAgent"
 import { ManagerAgent, type ProjectResult, type TeamStatus } from "./TeamHierarchy"
-import { SmartManager, type CapacityProbe } from "./SmartManager"
+import { SmartManager, TaskControlInterruption, type CapacityProbe, type TaskControlAction } from "./SmartManager"
 
 const execFileAsync = promisify(execFile)
 
@@ -35,7 +35,7 @@ export function classifyMessage(message: string): MessageType {
   const lower = message.toLowerCase().trim()
   if (/^(hi|hello|hey|hola)\b/.test(lower)) return "greeting"
   if (/^(status|progress|kahan tak|kitna hua)\b/.test(lower)) return "status_check"
-  if (/^(stop|cancel|pause|exit|kill)\b/.test(lower)) return "command"
+  if (/^(stop|cancel|pause|resume|exit|kill|update|change|instead|priority)\b/.test(lower)) return "command"
   if (/^(help|kya kar sakte|commands|menu)\b/.test(lower)) return "help"
   if (/^(galat|error|bug|sahi nahi|fail)\b/.test(lower)) return "complaint"
   if (/^(time|date|weather|joke|batao)\b/.test(lower)) return "small_talk"
@@ -110,12 +110,37 @@ export class UserLiaison {
       try {
         const result = await this.manager.runProject(message, root, {
           taskId: id,
+          checkpoint: async () => {
+            const control = await this.manager.consumeTaskControl(id)
+            if (!control) return
+            if (control.action === "pause" || control.action === "cancel") {
+              throw new TaskControlInterruption(control.action)
+            }
+            if (control.action === "update") {
+              const current = this.activeTasks.get(id) ?? initial
+              await this.emit({ ...current, status: "Updated instruction accepted", updatedAt: Date.now() })
+              return { instruction: control.instruction }
+            }
+          },
           onProgress: async (update) => {
             const status = this.fromTeamStatus(update, id, userId, message, now)
             await this.emit(status)
           },
         })
-        const complete: TaskStatus = { ...this.activeTasks.get(id) ?? initial, status: result.status === "completed" ? "Complete" : "Needs review", progress: 100, updatedAt: Date.now(), result }
+        const terminalStatus = result.status === "completed"
+          ? "Complete"
+          : result.status === "paused"
+            ? "Paused"
+            : result.status === "cancelled"
+              ? "Cancelled"
+              : "Needs review"
+        const complete: TaskStatus = {
+          ...this.activeTasks.get(id) ?? initial,
+          status: terminalStatus,
+          progress: result.status === "completed" ? 100 : (this.activeTasks.get(id)?.progress ?? initial.progress),
+          updatedAt: Date.now(),
+          result,
+        }
         await this.emit(complete)
         if (this.options.notify !== false) await this.notifyUser(`Task ${id}: ${complete.status}`)
       } catch (error) {
@@ -148,11 +173,24 @@ export class UserLiaison {
   }
 
   async getActiveTasks(userId = "local") {
-    return [...this.activeTasks.values()].filter((task) => task.userId === userId && task.status !== "Complete" && task.status !== "Failed")
+    const local = [...this.activeTasks.values()].filter((task) => task.userId === userId && !isTerminal(task.status))
+    if (local.length > 0) return local
+    const persisted = await this.manager.listTasks()
+    return persisted
+      .filter((task) => !["completed", "failed", "cancelled"].includes(task.state))
+      .map((task) => ({
+        taskId: task.id,
+        userId,
+        message: task.task,
+        status: task.state === "paused" ? "Paused" : task.state === "accepted" ? "Starting" : "Running",
+        progress: 0,
+        startedAt: task.createdAt,
+        updatedAt: task.updatedAt,
+      }))
   }
 
-  private getActiveTaskStatus(userId: string) {
-    const tasks = [...this.activeTasks.values()].filter((task) => task.userId === userId && task.status !== "Complete" && task.status !== "Failed")
+  private async getActiveTaskStatus(userId: string) {
+    const tasks = await this.getActiveTasks(userId)
     if (tasks.length === 0) return "All tasks are complete. Send another task any time."
     return ["Active tasks:", ...tasks.map((task) => `${this.progressBar(task.progress)} ${task.taskId} — ${task.status} (${task.progress}%)`)].join("\n")
   }
@@ -163,16 +201,30 @@ export class UserLiaison {
   }
 
   private async handleCommand(message: string, userId: string) {
-    if (/^\s*(stop|cancel|pause|kill)\b/i.test(message)) {
-      const tasks = await this.getActiveTasks(userId)
-      for (const task of tasks) {
-        const stopped = { ...task, status: "Cancelled", progress: task.progress, updatedAt: Date.now() }
-        this.activeTasks.set(task.taskId, stopped)
-        await this.persist(stopped)
-      }
-      return tasks.length > 0 ? `Cancelled ${tasks.length} active task(s).` : "No active tasks found."
-    }
-    return "Command received."
+    const lower = message.trim().toLowerCase()
+    const action: TaskControlAction | undefined = /^(stop|cancel|kill)\b/.test(lower)
+      ? "cancel"
+      : /^pause\b/.test(lower)
+        ? "pause"
+        : /^resume\b/.test(lower)
+          ? "resume"
+          : /^(update|change|instead|priority)\b/.test(lower)
+            ? "update"
+            : undefined
+    if (!action) return "Command received."
+    const tasks = await this.getActiveTasks(userId)
+    const task = tasks.sort((a, b) => b.updatedAt - a.updatedAt)[0]
+    if (!task) return "No active tasks found."
+    const instruction = action === "update" ? message.replace(/^\s*(update|change|instead|priority)\b\s*/i, "").trim() : undefined
+    if (action === "update" && !instruction) return "Tell me what to change, for example: update only inspect the API module."
+    const controlled = await this.manager.controlTask(task.taskId, action, instruction)
+    if (!controlled) return "The task is no longer available for control."
+    const status = action === "cancel" ? "Cancellation requested" : action === "pause" ? "Pause requested" : action === "resume" ? "Resume requested" : "Update requested"
+    const updated = { ...task, status, updatedAt: Date.now() }
+    await this.emit(updated)
+    return action === "update"
+      ? `Updated task ${task.taskId}. The new instruction will apply at the next safe checkpoint.`
+      : `${status} for ${task.taskId}. It will apply at the next safe checkpoint.`
   }
 
   private getHelpText() {
@@ -196,6 +248,10 @@ export class UserLiaison {
       // Termux:API is optional; console/status files remain the source of truth.
     }
   }
+}
+
+function isTerminal(status: string) {
+  return ["Complete", "Failed", "Cancelled"].includes(status)
 }
 
 export default UserLiaison

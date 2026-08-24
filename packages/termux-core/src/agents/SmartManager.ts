@@ -27,7 +27,21 @@ export type CapacityProbe = {
   meminfo?: string
 }
 
-export type PersistedTaskState = "accepted" | "running" | "completed" | "failed"
+export type PersistedTaskState = "accepted" | "running" | "paused" | "cancelled" | "completed" | "failed"
+export type TaskControlAction = "pause" | "cancel" | "update" | "resume"
+
+export type TaskControl = {
+  action: TaskControlAction
+  instruction?: string
+  requestedAt: number
+}
+
+export class TaskControlInterruption extends Error {
+  constructor(readonly action: "pause" | "cancel") {
+    super(action === "pause" ? "Task paused by user." : "Task cancelled by user.")
+    this.name = "TaskControlInterruption"
+  }
+}
 
 export type PersistedTask = {
   id: string
@@ -38,6 +52,7 @@ export type PersistedTask = {
   createdAt: number
   updatedAt: number
   error?: string
+  control?: TaskControl
 }
 
 type TaskStore = {
@@ -170,6 +185,35 @@ export class SmartManager {
     const current = tasks.find((task) => task.id === id)
     if (!current) return undefined
     return this.taskStore.upsert({ ...current, state, error, updatedAt: Date.now() })
+  }
+
+  async task(id: string) {
+    return (await this.taskStore.list()).find((item) => item.id === id)
+  }
+
+  async list() {
+    return this.taskStore.list()
+  }
+
+  async control(id: string, action: TaskControlAction, instruction?: string) {
+    const current = await this.task(id)
+    if (!current) return undefined
+    const state: PersistedTaskState = action === "pause" ? "paused" : action === "cancel" ? "cancelled" : action === "resume" ? "accepted" : current.state
+    return this.taskStore.upsert({
+      ...current,
+      state,
+      control: { action, instruction: instruction?.trim() || undefined, requestedAt: Date.now() },
+      updatedAt: Date.now(),
+    })
+  }
+
+  async consumeControl(id: string) {
+    const current = await this.task(id)
+    if (!current?.control) return undefined
+    const control = current.control
+    if (control.action === "cancel" || control.action === "pause") return control
+    await this.taskStore.upsert({ ...current, control: undefined, updatedAt: Date.now() })
+    return control
   }
 
   acknowledgement(capacity = this.capacity) {

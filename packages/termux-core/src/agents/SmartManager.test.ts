@@ -73,6 +73,32 @@ test("persistent task records survive a new queue instance", async () => {
   }
 })
 
+test("user task controls persist across a fresh liaison instance and wait for a safe checkpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nexus-task-control-"))
+  const queuePath = join(root, "queue.json")
+  const previousPath = process.env.NEXUS_QUEUE_PATH
+  process.env.NEXUS_QUEUE_PATH = queuePath
+  try {
+    const manager = new SmartManager(new PersistentTaskQueue(queuePath))
+    await manager.accept("task-control", "inspect the repository", root)
+    await manager.update("task-control", "running")
+
+    const liaison = new UserLiaison({ notify: false })
+    const update = await liaison.handleUserMessage("update only inspect the API module", "test", root)
+    assert.match(update, /next safe checkpoint/i)
+    const paused = await liaison.handleUserMessage("pause", "test", root)
+    assert.match(paused, /Pause requested/i)
+
+    const persisted = await new PersistentTaskQueue(queuePath).list()
+    assert.equal(persisted[0]?.state, "paused")
+    assert.equal(persisted[0]?.control?.action, "pause")
+  } finally {
+    if (previousPath === undefined) delete process.env.NEXUS_QUEUE_PATH
+    else process.env.NEXUS_QUEUE_PATH = previousPath
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test("big task acknowledgement is immediate, reports capacity, and omits the retired waiting label", async () => {
   const root = await mkdtemp(join(tmpdir(), "nexus-liaison-"))
   const queuePath = join(root, "queue.json")

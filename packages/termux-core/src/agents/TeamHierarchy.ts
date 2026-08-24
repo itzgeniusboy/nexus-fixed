@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { basename, join, resolve } from "node:path"
 import { DualWorkerPool } from "./DualWorkerPool"
 import { CodeReader, type FileSummary } from "./SeniorDevAgent"
-import { SmartManager } from "./SmartManager"
+import { SmartManager, TaskControlInterruption, type TaskControlAction } from "./SmartManager"
 
 export type TaskSize = "small" | "medium" | "large"
 
@@ -75,7 +75,7 @@ export type ProjectResult = {
   stats: RepoStats
   modules: ModulePlan[]
   leads: LeadResult[]
-  status: "completed" | "failed"
+  status: "completed" | "failed" | "paused" | "cancelled"
   summary: string
 }
 
@@ -173,6 +173,7 @@ export class TeamLeadAgent {
     private readonly ipcRoot: string,
     private readonly pool: DualWorkerPool,
     private readonly maxWorkers: number,
+    private readonly checkpoint?: () => Promise<{ instruction?: string } | void>,
   ) {}
 
   private splitTasks(module: ModulePlan): WorkerTask[] {
@@ -191,6 +192,7 @@ export class TeamLeadAgent {
     const worker = new WorkerAgent(this.ipcRoot)
     const checker = new CheckerAgent(this.ipcRoot)
     const workers = await Promise.all(tasks.map((task) => this.pool.execute(() => worker.execute(task))))
+    await this.checkpoint?.()
     const checks = await Promise.all(workers.map((result) => this.pool.execute(() => checker.check(result))))
     return {
       leadId: `lead-${module.id}`,
@@ -222,6 +224,22 @@ export class ManagerAgent {
 
   async acceptTask(taskId: string, task: string, root: string) {
     return this.smartManager.accept(taskId, task, root, this.capacity)
+  }
+
+  async task(taskId: string) {
+    return this.smartManager.task(taskId)
+  }
+
+  async listTasks() {
+    return this.smartManager.list()
+  }
+
+  async controlTask(taskId: string, action: TaskControlAction, instruction?: string) {
+    return this.smartManager.control(taskId, action, instruction)
+  }
+
+  async consumeTaskControl(taskId: string) {
+    return this.smartManager.consumeControl(taskId)
   }
 
   async scanRepo(root: string): Promise<RepoStats> {
@@ -259,7 +277,17 @@ export class ManagerAgent {
     await onProgress?.(status)
   }
 
-  async runProject(task: string, root: string, options: { onProgress?: ProgressCallback; forceTeam?: boolean; forceSolo?: boolean; taskId?: string } = {}): Promise<ProjectResult> {
+  async runProject(
+    task: string,
+    root: string,
+    options: {
+      onProgress?: ProgressCallback
+      forceTeam?: boolean
+      forceSolo?: boolean
+      taskId?: string
+      checkpoint?: () => Promise<{ instruction?: string } | void>
+    } = {},
+  ): Promise<ProjectResult> {
     const taskId = options.taskId ?? `task-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`
     const ipcRoot = join("/tmp", "nexus", "teams", taskId)
     await mkdir(ipcRoot, { recursive: true })
@@ -267,6 +295,8 @@ export class ManagerAgent {
     await this.smartManager.accept(taskId, task, root, capacity)
 
     try {
+      const initialCheckpoint = await options.checkpoint?.()
+      if (initialCheckpoint?.instruction) task = `${task}\nLatest user instruction: ${initialCheckpoint.instruction}`
       const stats = await this.scanRepo(root)
       const detectedSize = detectTaskSize(task, stats)
       const size: TaskSize = options.forceSolo ? "small" : options.forceTeam && detectedSize === "small" ? "medium" : detectedSize
@@ -302,7 +332,9 @@ export class ManagerAgent {
       const leads: LeadResult[] = []
       let completedModules = 0
       let completedWorkers = 0
-      const batchResults = await Promise.all(selectedModules.map((module) => new TeamLeadAgent(ipcRoot, pool, capacity.workersPerLead).execute(module)))
+      const batchResults = await Promise.all(
+        selectedModules.map((module) => new TeamLeadAgent(ipcRoot, pool, capacity.workersPerLead, options.checkpoint).execute(module)),
+      )
       for (const result of batchResults) {
         leads.push(result)
         completedModules += 1
@@ -333,6 +365,18 @@ export class ManagerAgent {
       await this.smartManager.update(taskId, resultStatus)
       return { taskId, size, stats, modules: selectedModules, leads, status: resultStatus, summary: `${resultStatus === "completed" ? "Team workflow completed" : "Team workflow needs review"}: ${leads.length} team lead(s), ${completedWorkers} worker(s), and file-based IPC at ${ipcRoot}.` }
     } catch (error) {
+      if (error instanceof TaskControlInterruption) {
+        await this.smartManager.update(taskId, error.action === "pause" ? "paused" : "cancelled")
+        return {
+          taskId,
+          size: "small",
+          stats: { root: resolve(root), fileCount: 0, totalBytes: 0, totalLines: 0, files: [] },
+          modules: [],
+          leads: [],
+          status: error.action === "pause" ? "paused" : "cancelled",
+          summary: error.message,
+        }
+      }
       await this.smartManager.update(taskId, "failed", error instanceof Error ? error.message : String(error))
       throw error
     }

@@ -28,9 +28,15 @@ export async function runBareUserTask(args: string[], dependencies: {
   writeError?: (text: string) => void
 } = {}) {
   const { UserLiaison } = await import("@nexus/termux-core")
-  const liaison = dependencies.liaison ?? new UserLiaison()
   const write = dependencies.write ?? process.stdout.write.bind(process.stdout)
   const writeError = dependencies.writeError ?? process.stderr.write.bind(process.stderr)
+  const liaison = dependencies.liaison ?? new UserLiaison({
+    onUpdate(status) {
+      if (!["Complete", "Failed", "Paused", "Cancelled", "Needs review"].includes(status.status)) return
+      const detail = status.result?.summary ?? status.error ?? status.status
+      write(`NEXUS task ${status.taskId}: ${detail}${EOL}`)
+    },
+  })
   try {
     const response = await liaison.handleUserMessage(args.join(" "), "local", process.cwd())
     write(response + EOL)
