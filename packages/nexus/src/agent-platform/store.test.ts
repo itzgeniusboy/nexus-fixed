@@ -39,6 +39,21 @@ describe("AgentPlatformStore", () => {
     store.close()
   })
 
+  test("exports and imports only an explicit non-device memory scope", () => {
+    const source = makeStore()
+    source.addMemory({ scope: "project", scopeId: "alpha", kind: "decision", content: "Use a redacted sync pack", confidence: 0.8 })
+    source.addMemory({ scope: "device", scopeId: "default", kind: "fact", content: "Do not sync this device-only preference", confidence: 0.8 })
+    const pack = source.exportMemorySyncPack("project", "alpha")
+    expect(pack.records).toHaveLength(1)
+    expect(pack.records[0]?.content).toContain("redacted sync pack")
+
+    const target = makeStore()
+    expect(target.importMemorySyncPack(pack)).toHaveLength(1)
+    expect(target.listMemory("project", "alpha")).toHaveLength(1)
+    source.close()
+    target.close()
+  })
+
   test("keeps learning proposed until an explicit approval creates a skill revision", () => {
     const store = makeStore()
     const proposal = store.proposeLearning({ runId: "run-1", title: "Safe API checks", summary: "Mask keys", skillDraft: "Always mask api_key=secret", evidence: ["api_key=secret"] })
