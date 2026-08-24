@@ -29,6 +29,16 @@ describe("AgentPlatformStore", () => {
     store.close()
   })
 
+  test("replaces and tombstones memory without leaving stale active content", () => {
+    const store = makeStore()
+    const memory = store.addMemory({ scope: "device", scopeId: "default", kind: "fact", content: "Old preference", confidence: 0.5 })
+    const replacement = store.replaceMemory(memory.id, { content: "New preference", confidence: 0.9 })
+    expect(store.listMemory("device", "default").map((item) => item.content)).toEqual(["New preference"])
+    store.deleteMemory(replacement.id)
+    expect(store.listMemory("device", "default")).toHaveLength(0)
+    store.close()
+  })
+
   test("keeps learning proposed until an explicit approval creates a skill revision", () => {
     const store = makeStore()
     const proposal = store.proposeLearning({ runId: "run-1", title: "Safe API checks", summary: "Mask keys", skillDraft: "Always mask api_key=secret", evidence: ["api_key=secret"] })
@@ -36,6 +46,18 @@ describe("AgentPlatformStore", () => {
     store.approveLearning(proposal.id)
     expect(store.listLearning("approved")).toHaveLength(1)
     expect(store.listLearning("approved")[0]?.skillDraft).not.toContain("api_key=secret")
+    store.close()
+  })
+
+  test("lists approved skills and revokes them explicitly", () => {
+    const store = makeStore()
+    const proposal = store.proposeLearning({ runId: "run-2", title: "Review safely", summary: "", skillDraft: "Do not expose secrets" })
+    store.approveLearning(proposal.id)
+    const revision = store.listSkillRevisions()[0]
+    expect(revision?.title).toBe("Review safely")
+    store.revokeSkillRevision(revision!.id)
+    expect(store.listSkillRevisions()).toHaveLength(0)
+    expect(store.listLearning("superseded")[0]?.id).toBe(proposal.id)
     store.close()
   })
 

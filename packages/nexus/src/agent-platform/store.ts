@@ -55,6 +55,15 @@ export type LearningProposal = {
   reviewedAt?: number
 }
 
+export type SkillRevision = {
+  id: string
+  proposalId: string
+  title: string
+  content: string
+  revision: number
+  createdAt: number
+}
+
 export type AgentSchedule = {
   id: string
   name: string
@@ -132,6 +141,17 @@ function decodeLearning(row: Record<string, unknown>): LearningProposal {
     status: row.status as LearningStatus,
     createdAt: Number(row.time_created),
     reviewedAt: row.time_reviewed == null ? undefined : Number(row.time_reviewed),
+  }
+}
+
+function decodeSkillRevision(row: Record<string, unknown>): SkillRevision {
+  return {
+    id: String(row.id),
+    proposalId: String(row.proposal_id),
+    title: String(row.title),
+    content: String(row.content),
+    revision: Number(row.revision),
+    createdAt: Number(row.time_created),
   }
 }
 
@@ -379,6 +399,29 @@ export class AgentPlatformStore {
     return rows.map(decodeMemory)
   }
 
+  deleteMemory(id: string) {
+    const result = this.db.query("UPDATE agent_memory SET status = 'deleted', time_updated = ? WHERE id = ? AND status = 'active'").run(now(), id)
+    if (!result.changes) throw new Error(`Active memory not found: ${id}`)
+    this.audit("memory.deleted", "memory", id, {})
+  }
+
+  replaceMemory(id: string, input: { content: string; confidence?: number }) {
+    const current = this.db.query("SELECT * FROM agent_memory WHERE id = ? AND status = 'active'").get(id) as Record<string, unknown> | null
+    if (!current) throw new Error(`Active memory not found: ${id}`)
+    const memory = decodeMemory(current)
+    this.db.query("UPDATE agent_memory SET status = 'superseded', time_updated = ? WHERE id = ?").run(now(), id)
+    const replacement = this.addMemory({
+      scope: memory.scope,
+      scopeId: memory.scopeId,
+      kind: memory.kind,
+      content: input.content,
+      sourceRunId: memory.sourceRunId,
+      confidence: input.confidence ?? memory.confidence,
+    })
+    this.audit("memory.replaced", "memory", id, { replacementId: replacement.id })
+    return replacement
+  }
+
   proposeLearning(input: { runId: string; title: string; summary: string; skillDraft: string; evidence?: string[] }) {
     const proposal: LearningProposal = {
       id: randomUUID(),
@@ -423,6 +466,21 @@ export class AgentPlatformStore {
     const result = this.db.query("UPDATE agent_learning_proposal SET status = 'rejected', time_reviewed = ? WHERE id = ? AND status = 'proposed'").run(now(), id)
     if (!result.changes) throw new Error(`No pending learning proposal found: ${id}`)
     this.audit("learning.rejected", "learning_proposal", id, {})
+  }
+
+  listSkillRevisions() {
+    return (this.db.query("SELECT * FROM agent_skill_revision ORDER BY time_created DESC").all() as Record<string, unknown>[]).map(decodeSkillRevision)
+  }
+
+  revokeSkillRevision(id: string) {
+    const revision = this.db.query("SELECT * FROM agent_skill_revision WHERE id = ?").get(id) as Record<string, unknown> | null
+    if (!revision) throw new Error(`Skill revision not found: ${id}`)
+    const proposalId = String(revision.proposal_id)
+    this.db.transaction(() => {
+      this.db.query("DELETE FROM agent_skill_revision WHERE id = ?").run(id)
+      this.db.query("UPDATE agent_learning_proposal SET status = 'superseded', time_reviewed = ? WHERE id = ?").run(now(), proposalId)
+    })()
+    this.audit("skill.revoked", "skill_revision", id, { proposalId })
   }
 
   createRun(input: { mode?: AgentRun["mode"]; parentRunId?: string; idempotencyKey?: string; policy?: Partial<RunPolicy> }) {

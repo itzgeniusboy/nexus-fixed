@@ -42,6 +42,7 @@ import { AssetCommand } from "./cli/cmd/asset"
 import { LuaCommand } from "./cli/cmd/lua"
 import { DoctorCommand } from "./cli/cmd/doctor"
 import { ProfileCommand } from "./cli/cmd/profile"
+import { OnboardCommand } from "./cli/cmd/onboard"
 
 const rawArgs = hideBin(process.argv)
 const args = rawArgs
@@ -129,6 +130,7 @@ const cli = yargs(args)
   .command(AssistantCommand)
   .command(DoctorCommand)
   .command(ProfileCommand)
+  .command(OnboardCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||

@@ -265,7 +265,7 @@ const AgentMemoryCommand = cmd({
   describe: "manage local, redacted, cross-session agent memory",
   builder: (yargs: Argv) =>
     yargs
-      .positional("operation", { choices: ["add", "list", "search"] as const, describe: "memory operation" })
+      .positional("operation", { choices: ["add", "list", "search", "replace", "delete"] as const, describe: "memory operation" })
       .positional("query", { type: "string", array: true, describe: "search text" })
       .option("content", { type: "string", describe: "memory text for add" })
       .option("scope", { choices: ["device", "project", "channel"] as const, default: "device", describe: "memory visibility scope" })
@@ -281,6 +281,19 @@ const AgentMemoryCommand = cmd({
         if (!args.content) throw new Error("Memory content required. Use: nexus agent memory add --content \"...\"")
         const memory = store.addMemory({ scope, scopeId, kind: args.kind as MemoryKind, content: args.content, confidence: args.confidence })
         process.stdout.write(`Saved redacted ${memory.kind} memory ${memory.id} in ${memory.scope}:${memory.scopeId}${EOL}`)
+        return
+      }
+      const id = (args.query ?? [])[0]
+      if (args.operation === "delete") {
+        if (!id) throw new Error("Memory id required. Use: nexus agent memory delete <id>")
+        store.deleteMemory(id)
+        process.stdout.write(`Memory ${id} deleted locally. The audit record remains for accountability.${EOL}`)
+        return
+      }
+      if (args.operation === "replace") {
+        if (!id || !args.content) throw new Error("Memory replacement requires an id and --content. Use: nexus agent memory replace <id> --content \"...\"")
+        const replacement = store.replaceMemory(id, { content: args.content, confidence: args.confidence })
+        process.stdout.write(`Memory ${id} superseded by redacted replacement ${replacement.id}.${EOL}`)
         return
       }
       const memories = args.operation === "search"
@@ -304,7 +317,7 @@ const AgentLearningCommand = cmd({
   describe: "review and approve reusable learning proposals; no proposal activates automatically",
   builder: (yargs: Argv) =>
     yargs
-      .positional("operation", { choices: ["propose", "list", "approve", "reject"] as const, describe: "learning operation" })
+      .positional("operation", { choices: ["propose", "list", "approve", "reject", "skills", "revoke"] as const, describe: "learning operation" })
       .positional("id", { type: "string", describe: "proposal id for approve or reject" })
       .option("run", { type: "string", describe: "source run id for a proposal" })
       .option("title", { type: "string", describe: "proposal title" })
@@ -330,6 +343,18 @@ const AgentLearningCommand = cmd({
         if (!args.id) throw new Error("Proposal id required")
         store.rejectLearning(args.id)
         process.stdout.write(`Learning proposal ${args.id} rejected${EOL}`)
+        return
+      }
+      if (args.operation === "revoke") {
+        if (!args.id) throw new Error("Skill revision id required")
+        store.revokeSkillRevision(args.id)
+        process.stdout.write(`Skill revision ${args.id} revoked. Its learning proposal is now superseded.${EOL}`)
+        return
+      }
+      if (args.operation === "skills") {
+        const skills = store.listSkillRevisions()
+        if (!skills.length) process.stdout.write("No approved skill revisions found" + EOL)
+        for (const skill of skills) process.stdout.write(`${skill.id}\trevision=${skill.revision}\t${skill.title}\tproposal=${skill.proposalId}${EOL}`)
         return
       }
       const proposals = store.listLearning(args.status as LearningStatus | undefined)
