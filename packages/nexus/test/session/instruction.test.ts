@@ -4,7 +4,7 @@ import path from "path"
 import { Effect, FileSystem, Layer } from "effect"
 import { CrossSpawnSpawner } from "@nexus-ai/core/cross-spawn-spawner"
 
-import { Instruction } from "../../src/session/instruction"
+import { Instruction, redactInstructionText } from "../../src/session/instruction"
 import type { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Global } from "@nexus-ai/core/global"
@@ -112,6 +112,46 @@ function loaded(filepath: string): SessionV1.WithParts[] {
 }
 
 describe("Instruction.resolve", () => {
+  test("redacts narrow credential assignments without changing ordinary rules", () => {
+    expect(redactInstructionText("API_KEY=sk-local-secret\nKeep tests focused.")).toBe(
+      "API_KEY= [redacted]\nKeep tests focused.",
+    )
+    expect(redactInstructionText("Authorization: Bearer abcdefghijklmnop")).toBe("Authorization: Bearer [redacted]")
+  })
+
+  it.live("prefers NEXUS.md over legacy project instruction filenames", () =>
+    Effect.gen(function* () {
+      const globalTmp = yield* tmpdirScoped()
+      const projectTmp = yield* tmpWithFiles({ "NEXUS.md": "# NEXUS Rules", "AGENTS.md": "# Legacy Rules" })
+      return yield* Effect.gen(function* () {
+        const svc = yield* Instruction.Service
+        const paths = yield* svc.systemPaths()
+        expect(paths.has(path.join(projectTmp, "NEXUS.md"))).toBe(true)
+        expect(paths.has(path.join(projectTmp, "AGENTS.md"))).toBe(false)
+        expect(yield* svc.system()).toEqual([`Instructions from: ${path.join(projectTmp, "NEXUS.md")}\n# NEXUS Rules`])
+      }).pipe(provideInstance(projectTmp), provideInstruction({ home: globalTmp, config: globalTmp }))
+    }),
+  )
+
+  it.live("discovers nearby NEXUS.md once per message without writing project files", () =>
+    withFiles({ "subdir/NEXUS.md": "# Scoped Rules", "subdir/nested/file.ts": "const x = 1" }, (dir) =>
+      Effect.gen(function* () {
+        const svc = yield* Instruction.Service
+        const filepath = path.join(dir, "subdir", "nested", "file.ts")
+        const id = MessageID.make("msg_nexus-instructions-1")
+        const first = yield* svc.resolve([], filepath, id)
+        const second = yield* svc.resolve([], filepath, id)
+        expect(first).toEqual([
+          {
+            filepath: path.join(dir, "subdir", "NEXUS.md"),
+            content: `Instructions from: ${path.join(dir, "subdir", "NEXUS.md")}\n# Scoped Rules`,
+          },
+        ])
+        expect(second).toEqual([])
+      }),
+    ),
+  )
+
   it.live("returns empty when AGENTS.md is at project root (already in systemPaths)", () =>
     withFiles({ "AGENTS.md": "# Root Instructions", "src/file.ts": "const x = 1" }, (dir) =>
       Effect.gen(function* () {

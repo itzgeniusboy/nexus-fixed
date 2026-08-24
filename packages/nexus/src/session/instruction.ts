@@ -14,6 +14,18 @@ import { Global } from "@nexus-ai/core/global"
 import type { MessageV2 } from "./message-v2"
 import type { MessageID } from "./schema"
 
+const INSTRUCTION_FILES = ["NEXUS.md", "AGENTS.md", "CLAUDE.md", "CONTEXT.md"] as const
+
+/** Keep project rules readable while preventing common credential assignments from entering prompt context. */
+export function redactInstructionText(content: string): string {
+  return content
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|auth(?:orization)?|bearer[_-]?token|password|secret)\s*([:=])\s*(?!Bearer\b)(["']?)[^\s"']+\3/gi,
+      "$1$2 [redacted]",
+    )
+    .replace(/\b(Bearer)\s+[A-Za-z0-9._-]{8,}/gi, "$1 [redacted]")
+}
+
 function extract(messages: SessionV1.WithParts[]) {
   const paths = new Set<string>()
   for (const msg of messages) {
@@ -61,11 +73,7 @@ const layer: Layer.Layer<
       path.join(global.config, "AGENTS.md"),
       ...(!flags.disableClaudeCodePrompt ? [path.join(global.home, ".claude", "CLAUDE.md")] : []),
     ]
-    const instructionFiles = [
-      "AGENTS.md",
-      ...(!flags.disableClaudeCodePrompt ? ["CLAUDE.md"] : []),
-      "CONTEXT.md", // deprecated
-    ]
+    const instructionFiles = INSTRUCTION_FILES.filter((file) => file !== "CLAUDE.md" || !flags.disableClaudeCodePrompt)
 
     const state = yield* InstanceState.make(
       Effect.fn("Instruction.state")(() =>
@@ -89,7 +97,8 @@ const layer: Layer.Layer<
     })
 
     const read = Effect.fnUntraced(function* (filepath: string) {
-      return yield* fs.readFileString(filepath).pipe(Effect.catch(() => Effect.succeed("")))
+      const content = yield* fs.readFileString(filepath).pipe(Effect.catch(() => Effect.succeed("")))
+      return redactInstructionText(content)
     })
 
     const fetch = Effect.fnUntraced(function* (url: string) {
