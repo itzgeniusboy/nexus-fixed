@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import { executeLocalIntent, formatIntentExecution, formatIntentInspection, inspectIntent } from "../../src/cli/cmd/intent"
+import { readWorkspaceSelection, writeWorkspaceSelection } from "../../src/cli/cmd/workspace"
 
 describe("local intent inspection", () => {
   test("classifies bounded Hinglish and English requests deterministically without execution", () => {
@@ -89,6 +93,29 @@ describe("local intent inspection", () => {
       confidence: "none",
       execution: "not-run",
     })
+  })
+
+  test("requires a separate confirmation before clearing only the local workspace selection bookmark", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nexus-intent-confirm-"))
+    try {
+      await writeWorkspaceSelection({ configDirectory: directory, projectID: "local-project", selectedAt: 1 })
+      const request = "workspace selection bookmark clear kar do"
+      const inspection = inspectIntent(request)
+      const withoutConfirmation = await executeLocalIntent(request, { workspaceSelectionDirectory: directory })
+
+      expect(inspection).toMatchObject({ category: "workspace-mutation", execution: "not-run" })
+      expect(withoutConfirmation).toMatchObject({ execution: "blocked" })
+      expect(withoutConfirmation.reason).toContain("--confirm-local")
+      expect((await readWorkspaceSelection(directory))?.projectID).toBe("local-project")
+
+      const confirmed = await executeLocalIntent(request, { confirmLocal: true, workspaceSelectionDirectory: directory })
+      expect(confirmed).toMatchObject({ execution: "executed" })
+      expect(confirmed.result).toContain("Cleared the local workspace selection bookmark")
+      expect(await readWorkspaceSelection(directory)).toBeUndefined()
+      expect(formatIntentExecution(confirmed, "table")).toContain("completed locally (confirmed mutation)")
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test("does not suggest agent creation or selection for an inspection-only role request", () => {

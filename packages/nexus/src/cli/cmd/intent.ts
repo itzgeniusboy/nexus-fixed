@@ -5,7 +5,7 @@ import { formatApiReadiness, formatApiRoutePreview, formatApiUsageBudget, format
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
-import { formatWorkspaceSelection, readWorkspaceSelection } from "./workspace"
+import { clearWorkspaceSelection, formatWorkspaceSelection, readWorkspaceSelection } from "./workspace"
 import {
   collectTranslationFiles,
   createTranslationPlan,
@@ -24,6 +24,7 @@ export type IntentInspection = {
     | "code"
     | "diagnostics"
     | "workspace"
+    | "workspace-mutation"
     | "translation"
     | "version-control"
     | "api-status"
@@ -65,6 +66,13 @@ const intentRules: readonly IntentRule[] = [
     category: "diagnostics",
     plugin: "devtools",
     command: "doctor:explain",
+  },
+  {
+    pattern:
+      /(?:clear|remove|delete|hatado|hata do).*(?:workspace|project).*(?:bookmark|selection)|(?:workspace|project).*(?:bookmark|selection).*(?:clear|remove|delete|hatado|hata do)/i,
+    category: "workspace-mutation",
+    plugin: "workspace",
+    command: "clear selection bookmark",
   },
   {
     pattern:
@@ -234,6 +242,11 @@ export type IntentExecution = Omit<IntentInspection, "execution"> & {
   reason?: string
 }
 
+export type IntentExecutionOptions = {
+  confirmLocal?: boolean
+  workspaceSelectionDirectory?: string
+}
+
 function roleNamedIn(value: string): SpecialistRoleName | undefined {
   return specialistRoleNames.find((role) => new RegExp(`\\b${role}\\b`, "i").test(value))
 }
@@ -262,11 +275,12 @@ function requestedKnownModelAlias(value: string): "deepseek" | "llama3_1" | "gem
 }
 
 /**
- * Executes only a literal allowlist of local read-only formatters. It never shells out,
- * loads plugins, calls a model/provider, validates keys, changes vault/route state, or
- * forwards the user message to another subsystem.
+ * Executes only a literal allowlist of local formatters. The sole mutation requires
+ * a separate explicit confirmation. It never shells out, loads plugins, calls a
+ * model/provider, validates keys, changes vault/route state, or forwards the user
+ * message to another subsystem.
  */
-export async function executeLocalIntent(value: string): Promise<IntentExecution> {
+export async function executeLocalIntent(value: string, options: IntentExecutionOptions = {}): Promise<IntentExecution> {
   const inspection = inspectIntent(value)
   if (inspection.confidence !== "high") {
     return blockedExecution(inspection, "Only a bounded, high-confidence read-only local intent may be executed.")
@@ -368,6 +382,22 @@ export async function executeLocalIntent(value: string): Promise<IntentExecution
   if (inspection.category === "workspace" && inspection.command === "selected") {
     return { ...inspection, execution: "executed", result: formatWorkspaceSelection(await readWorkspaceSelection()) }
   }
+  if (inspection.category === "workspace-mutation" && inspection.command === "clear selection bookmark") {
+    if (!options.confirmLocal) {
+      return blockedExecution(
+        inspection,
+        "Clearing the local workspace selection bookmark requires --confirm-local. No mutation was performed.",
+      )
+    }
+    const cleared = await clearWorkspaceSelection(options.workspaceSelectionDirectory)
+    return {
+      ...inspection,
+      execution: "executed",
+      result: cleared
+        ? "Cleared the local workspace selection bookmark. This did not change the shell directory, project/source/configuration/session state, provider/vault/model state, or any remote resource."
+        : "No local workspace selection bookmark existed. Nothing was changed.",
+    }
+  }
   return blockedExecution(
     inspection,
     "This suggested route is not in the explicit read-only execution allowlist and was not run.",
@@ -380,12 +410,14 @@ export function formatIntentExecution(result: IntentExecution, format: "table" |
     `Category: ${result.category}`,
     `Suggested local route: ${result.plugin && result.command ? `${result.plugin}:${result.command}` : "none"}`,
     `Confidence: ${result.confidence}`,
-    `Execution: ${result.execution === "executed" ? "completed locally (read-only)" : "blocked"}`,
+    `Execution: ${result.execution === "executed" ? (result.category === "workspace-mutation" ? "completed locally (confirmed mutation)" : "completed locally (read-only)") : "blocked"}`,
   ]
   if (result.execution === "executed" && result.result) lines.push("Result:", result.result)
   else if (result.reason) lines.push(`Reason: ${result.reason}`)
   lines.push(
-    "Execution boundary: no model call, plugin load, shell execution, remote request, key check, write, route selection, or persistent preference occurred.",
+    result.category === "workspace-mutation" && result.execution === "executed"
+      ? "Execution boundary: only the explicitly confirmed local workspace selection bookmark was cleared; no model call, plugin load, shell execution, remote request, key check, route selection, or other persistent preference change occurred."
+      : "Execution boundary: no model call, plugin load, shell execution, remote request, key check, write, route selection, or persistent preference occurred.",
   )
   return lines.join(EOL)
 }
@@ -406,11 +438,18 @@ export const IntentCommand = cmd({
         type: "boolean",
         default: false,
         describe: "explicitly run a hard-coded local read-only allowlist; all other suggestions remain blocked",
+      })
+      .option("confirm-local", {
+        type: "boolean",
+        default: false,
+        describe: "separately confirm the one supported local mutation; has no effect without --execute-local",
       }),
-  async handler(args: { message: string[]; format?: "table" | "json"; executeLocal?: boolean }) {
+  async handler(args: { message: string[]; format?: "table" | "json"; executeLocal?: boolean; confirmLocal?: boolean }) {
     const message = args.message.join(" ")
     if (args.executeLocal) {
-      process.stdout.write(formatIntentExecution(await executeLocalIntent(message), args.format ?? "table") + EOL)
+      process.stdout.write(
+        formatIntentExecution(await executeLocalIntent(message, { confirmLocal: args.confirmLocal }), args.format ?? "table") + EOL,
+      )
       return
     }
     process.stdout.write(formatIntentInspection(inspectIntent(message), args.format ?? "table") + EOL)
