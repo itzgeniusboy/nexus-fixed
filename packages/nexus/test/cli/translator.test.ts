@@ -7,6 +7,7 @@ import {
   createTranslationPlan,
   formatTranslationPlan,
   isPathWithin,
+  writeTranslationReport,
 } from "../../src/cli/cmd/translator"
 
 const temporaryDirectories: string[] = []
@@ -60,6 +61,27 @@ describe("translator planning", () => {
 
     await expect(collectTranslationFiles({ root, scope: "..", language: "python", maxFiles: 10 })).rejects.toThrow(
       "Translation scope must stay inside the current project",
+    )
+  })
+
+  test("writes a confirmed manual-review report only as a new project-contained JSON file", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-translator-"))
+    temporaryDirectories.push(root)
+    const plan = createTranslationPlan({
+      source: "typescript",
+      target: "python",
+      scope: "src",
+      files: ["src/app.ts"],
+      truncated: false,
+    })
+
+    const report = await writeTranslationReport({ root, output: "reports/translation-plan.json", plan })
+
+    expect(report).toBe("reports/translation-plan.json")
+    expect(JSON.parse(await fs.readFile(path.join(root, report), "utf8"))).toEqual(plan)
+    await expect(writeTranslationReport({ root, output: report, plan })).rejects.toThrow()
+    await expect(writeTranslationReport({ root, output: "../outside.json", plan })).rejects.toThrow(
+      "Translation report path must stay inside the current project",
     )
   })
 })

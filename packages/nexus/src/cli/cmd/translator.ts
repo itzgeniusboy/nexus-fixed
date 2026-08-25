@@ -119,6 +119,25 @@ export function formatTranslationPlan(plan: TranslationPlan, format: "table" | "
   return lines.join(EOL)
 }
 
+export async function writeTranslationReport(input: {
+  root: string
+  output: string
+  plan: TranslationPlan
+}): Promise<string> {
+  const root = await fs.realpath(input.root)
+  const output = path.resolve(root, input.output)
+  if (!isPathWithin(root, output)) throw new Error("Translation report path must stay inside the current project")
+  if (path.extname(output).toLowerCase() !== ".json") throw new Error("Translation report must use a .json filename")
+
+  const parent = path.dirname(output)
+  await fs.mkdir(parent, { recursive: true })
+  const actualParent = await fs.realpath(parent)
+  if (!isPathWithin(root, actualParent)) throw new Error("Translation report path must stay inside the current project")
+
+  await fs.writeFile(output, JSON.stringify(input.plan, null, 2) + "\n", { encoding: "utf8", flag: "wx" })
+  return path.relative(root, output)
+}
+
 export const TranslatorPlanCommand = effectCmd({
   command: "plan [scope]",
   describe: "create a bounded local translation plan without reading contents, calling a model, or writing files",
@@ -152,6 +171,15 @@ export const TranslatorPlanCommand = effectCmd({
         type: "string",
         choices: ["table", "json"],
         default: "table",
+      })
+      .option("report", {
+        describe: "optional project-contained .json manual-review report to create",
+        type: "string",
+      })
+      .option("confirm", {
+        describe: "explicitly confirm creating a new manual-review report file",
+        type: "boolean",
+        default: false,
       }),
   handler: Effect.fn("Cli.translator.plan")(function* (args: {
     scope?: string
@@ -159,6 +187,8 @@ export const TranslatorPlanCommand = effectCmd({
     to?: TranslationLanguage
     maxFiles?: number
     format?: "table" | "json"
+    report?: string
+    confirm?: boolean
   }) {
     if (!args.from || !args.to) return yield* fail("Both --from and --to are required")
     const maxFiles = args.maxFiles ?? 50
@@ -181,6 +211,16 @@ export const TranslatorPlanCommand = effectCmd({
       files: collected.files,
       truncated: collected.truncated,
     })
+    if (args.report) {
+      if (!args.confirm) return yield* fail("Creating a translation report requires --confirm")
+      const reportPath = yield* Effect.tryPromise({
+        try: () => writeTranslationReport({ root, output: args.report!, plan }),
+        catch: (error) => error,
+      })
+      process.stdout.write(
+        `Manual-review report created at ${reportPath}. It contains plan metadata only; no source was read or translated.${EOL}`,
+      )
+    }
     process.stdout.write(formatTranslationPlan(plan, args.format ?? "table") + EOL)
   }),
 })
