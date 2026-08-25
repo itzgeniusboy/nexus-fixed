@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { executeLocalIntent, formatIntentExecution, formatIntentInspection, inspectIntent } from "../../src/cli/cmd/intent"
@@ -200,6 +200,31 @@ describe("local intent inspection", () => {
     expect(plan.result).toContain("This command does not read file contents, call a model, or write translated output")
     expect(ambiguous.execution).toBe("blocked")
     expect(ambiguous.reason).toContain("exactly two distinct supported languages")
+  })
+
+  test("writes only a confirmed fixed-name translation metadata report without overwriting", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "nexus-intent-translation-report-"))
+    try {
+      const request = "TypeScript se Python translation report save karo"
+      const reportPath = join(directory, ".nexus-translation-plan.json")
+      const withoutConfirmation = await executeLocalIntent(request, { translationRoot: directory })
+
+      expect(withoutConfirmation).toMatchObject({ execution: "blocked" })
+      expect(withoutConfirmation.reason).toContain("--confirm-local")
+      expect(existsSync(reportPath)).toBe(false)
+
+      const confirmed = await executeLocalIntent(request, { confirmLocal: true, translationRoot: directory })
+      expect(confirmed).toMatchObject({ category: "translation", command: "confirmed report", execution: "executed" })
+      expect(existsSync(reportPath)).toBe(true)
+      expect(readFileSync(reportPath, "utf8")).toContain('"source": "typescript"')
+
+      const second = await executeLocalIntent(request, { confirmLocal: true, translationRoot: directory })
+      expect(second).toMatchObject({ execution: "blocked" })
+      expect(second.reason).toContain("never overwritten")
+      expect(formatIntentExecution(confirmed, "table")).toContain("completed locally (confirmed mutation)")
+    } finally {
+      rmSync(directory, { recursive: true, force: true })
+    }
   })
 
   test("executes informational local-model guidance and redacted known-alias route preview only", async () => {

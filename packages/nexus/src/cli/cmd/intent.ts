@@ -12,12 +12,14 @@ import {
   formatTranslationPlan,
   translationLanguages,
   type TranslationLanguage,
+  writeTranslationReport,
 } from "./translator"
 import { getDeviceConfig } from "@nexus-ai/core/device"
 import { formatLocalModelCatalog, formatLocalModelRecommendations } from "./local-models"
 import { routeModel } from "../../api/ModelRouter"
 
 const MAX_INTENT_INPUT_LENGTH = 1_000
+const CONFIRMED_TRANSLATION_REPORT = ".nexus-translation-plan.json"
 
 export type IntentInspection = {
   category:
@@ -92,6 +94,13 @@ const intentRules: readonly IntentRule[] = [
     category: "workspace",
     plugin: "workspace",
     command: "list",
+  },
+  {
+    pattern:
+      /(?:(?:translate|translation|convert|badlo).*(?:php|python|go|typescript|javascript).*(?:report|save|write)|(?:php|python|go|typescript|javascript).*(?:translate|translation|convert|badlo).*(?:report|save|write))/i,
+    category: "translation",
+    plugin: "translator",
+    command: "confirmed report",
   },
   {
     pattern:
@@ -245,6 +254,7 @@ export type IntentExecution = Omit<IntentInspection, "execution"> & {
 export type IntentExecutionOptions = {
   confirmLocal?: boolean
   workspaceSelectionDirectory?: string
+  translationRoot?: string
 }
 
 function roleNamedIn(value: string): SpecialistRoleName | undefined {
@@ -275,7 +285,7 @@ function requestedKnownModelAlias(value: string): "deepseek" | "llama3_1" | "gem
 }
 
 /**
- * Executes only a literal allowlist of local formatters. The sole mutation requires
+ * Executes only a literal allowlist of local formatters. The two narrow mutations require
  * a separate explicit confirmation. It never shells out, loads plugins, calls a
  * model/provider, validates keys, changes vault/route state, or forwards the user
  * message to another subsystem.
@@ -320,7 +330,7 @@ export async function executeLocalIntent(value: string, options: IntentExecution
         : blockedExecution(inspection, "Name one supported role: planner, coder, reviewer, or tester.")
     }
   }
-  if (inspection.category === "translation" && inspection.command === "plan") {
+  if (inspection.category === "translation" && (inspection.command === "plan" || inspection.command === "confirmed report")) {
     const languages = requestedTranslationLanguages(value)
     if (!languages) {
       return blockedExecution(
@@ -328,25 +338,48 @@ export async function executeLocalIntent(value: string, options: IntentExecution
         "State exactly two distinct supported languages: typescript, javascript, python, php, or go.",
       )
     }
+    if (inspection.command === "confirmed report" && !options.confirmLocal) {
+      return blockedExecution(
+        inspection,
+        "Writing the fixed local translation metadata report requires --confirm-local. No report was created.",
+      )
+    }
+    if (inspection.command === "confirmed report" && /\b(?:to|at|path)\s+\S+\.json\b/i.test(value)) {
+      return blockedExecution(
+        inspection,
+        `The confirmed report uses only the fixed ${CONFIRMED_TRANSLATION_REPORT} filename; no user-supplied path is accepted.`,
+      )
+    }
     try {
-      const root = process.cwd()
+      const root = options.translationRoot ?? process.cwd()
       const collected = await collectTranslationFiles({ root, scope: ".", language: languages.source, maxFiles: 50 })
+      const plan = createTranslationPlan({
+        source: languages.source,
+        target: languages.target,
+        scope: ".",
+        files: collected.files,
+        truncated: collected.truncated,
+      })
+      if (inspection.command === "confirmed report") {
+        const report = await writeTranslationReport({ root, output: CONFIRMED_TRANSLATION_REPORT, plan })
+        return {
+          ...inspection,
+          execution: "executed",
+          result: `Created ${report} with translation-plan metadata only. No source content was read, no model/provider was called, and no code was transformed.`,
+        }
+      }
       return {
         ...inspection,
         execution: "executed",
-        result: formatTranslationPlan(
-          createTranslationPlan({
-            source: languages.source,
-            target: languages.target,
-            scope: ".",
-            files: collected.files,
-            truncated: collected.truncated,
-          }),
-          "table",
-        ),
+        result: formatTranslationPlan(plan, "table"),
       }
     } catch {
-      return blockedExecution(inspection, "The current project could not be inventoried within the bounded local plan.")
+      return blockedExecution(
+        inspection,
+        inspection.command === "confirmed report"
+          ? `The fixed ${CONFIRMED_TRANSLATION_REPORT} report could not be created; existing files are never overwritten.`
+          : "The current project could not be inventoried within the bounded local plan.",
+      )
     }
   }
   if (inspection.category === "local-model" && inspection.command === "local recommendations") {
@@ -406,17 +439,22 @@ export async function executeLocalIntent(value: string, options: IntentExecution
 
 export function formatIntentExecution(result: IntentExecution, format: "table" | "json"): string {
   if (format === "json") return JSON.stringify(result, null, 2)
+  const confirmedMutation =
+    result.execution === "executed" &&
+    (result.category === "workspace-mutation" || (result.category === "translation" && result.command === "confirmed report"))
   const lines = [
     `Category: ${result.category}`,
     `Suggested local route: ${result.plugin && result.command ? `${result.plugin}:${result.command}` : "none"}`,
     `Confidence: ${result.confidence}`,
-    `Execution: ${result.execution === "executed" ? (result.category === "workspace-mutation" ? "completed locally (confirmed mutation)" : "completed locally (read-only)") : "blocked"}`,
+    `Execution: ${result.execution === "executed" ? (confirmedMutation ? "completed locally (confirmed mutation)" : "completed locally (read-only)") : "blocked"}`,
   ]
   if (result.execution === "executed" && result.result) lines.push("Result:", result.result)
   else if (result.reason) lines.push(`Reason: ${result.reason}`)
   lines.push(
     result.category === "workspace-mutation" && result.execution === "executed"
       ? "Execution boundary: only the explicitly confirmed local workspace selection bookmark was cleared; no model call, plugin load, shell execution, remote request, key check, route selection, or other persistent preference change occurred."
+      : result.category === "translation" && result.command === "confirmed report" && result.execution === "executed"
+        ? `Execution boundary: only the explicitly confirmed new ${CONFIRMED_TRANSLATION_REPORT} metadata report was created; no source content was read, model/provider called, code transformed, existing file overwritten, shell command executed, or remote request made.`
       : "Execution boundary: no model call, plugin load, shell execution, remote request, key check, write, route selection, or persistent preference occurred.",
   )
   return lines.join(EOL)
@@ -424,7 +462,7 @@ export function formatIntentExecution(result: IntentExecution, format: "table" |
 
 export const IntentCommand = cmd({
   command: "intent <message..>",
-  describe: "inspect a bounded Hinglish/English intent locally; `--execute-local` has a strict read-only allowlist",
+  describe: "inspect a bounded Hinglish/English intent locally; mutations require explicit execution and confirmation flags",
   builder: (yargs) =>
     yargs
       .positional("message", {
@@ -437,7 +475,7 @@ export const IntentCommand = cmd({
       .option("execute-local", {
         type: "boolean",
         default: false,
-        describe: "explicitly run a hard-coded local read-only allowlist; all other suggestions remain blocked",
+        describe: "explicitly run a hard-coded local allowlist; mutations still require --confirm-local",
       })
       .option("confirm-local", {
         type: "boolean",
