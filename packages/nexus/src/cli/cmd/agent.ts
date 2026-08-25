@@ -16,6 +16,8 @@ import { clearLocalGatewayState, defaultLocalGatewayStatePath, gatewayCredential
 import { planGatewayRun } from "../../agent-platform/gateway"
 import { SecretStore } from "@nexus-ai/assistant/core/secret-store"
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
+import { agentCapabilityStatus, formatAgentCapabilityStatus } from "./agent-status"
+import { collectDeviceReadiness } from "./device"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -665,9 +667,34 @@ const AgentRunCommand = cmd({
   },
 })
 
+const AgentStatusCommand = cmd({
+  command: "status",
+  describe: "inspect local learning, scheduler, subagent, and gateway capability metadata without starting anything",
+  builder: (yargs) => yargs.option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
+  async handler(args: { format?: "table" | "json" }) {
+    const store = new AgentPlatformStore()
+    try {
+      const status = agentCapabilityStatus({
+        learning: store.listLearning(),
+        skillRevisions: store.listSkillRevisions(),
+        schedules: store.listSchedules(),
+        runs: store.listRuns(),
+        gateways: store.listGatewayConnections(),
+        device: await collectDeviceReadiness(),
+        localGatewayState: readLocalGatewayState(),
+      })
+      process.stdout.write(formatAgentCapabilityStatus(status, args.format ?? "table") + EOL)
+    } catch (error) {
+      platformError(error)
+    } finally {
+      store.close()
+    }
+  },
+})
+
 export const AgentCommand = cmd({
   command: "agent",
   describe: "manage agents",
-  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentRoleCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).demandCommand(),
+  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentRoleCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).command(AgentStatusCommand).demandCommand(),
   async handler() {},
 })
