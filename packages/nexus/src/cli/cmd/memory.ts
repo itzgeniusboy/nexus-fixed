@@ -106,6 +106,51 @@ export function listLocalMemories(input: { stateDirectory?: string; limit?: numb
   }
 }
 
+function normalizedMemoryID(id: number): number {
+  if (!Number.isSafeInteger(id) || id < 1) throw new Error("Memory ID must be a positive integer")
+  return id
+}
+
+export function getLocalMemory(input: { id: number; stateDirectory?: string }): LocalMemoryEntry | undefined {
+  const id = normalizedMemoryID(input.id)
+  const path = memoryDatabasePath(input.stateDirectory ?? Global.Path.state)
+  if (!existsSync(path)) return undefined
+  const database = new Database(path, { readonly: true })
+  try {
+    const entry = database.query("SELECT id, title, value, created_at AS createdAt FROM nexus_memory WHERE id = $id").get({ $id: id }) as
+      | LocalMemoryEntry
+      | null
+    return entry ?? undefined
+  } finally {
+    database.close()
+  }
+}
+
+export function removeLocalMemory(input: {
+  id: number
+  confirmed: boolean
+  stateDirectory?: string
+}): LocalMemoryEntry | undefined {
+  const id = normalizedMemoryID(input.id)
+  if (!input.confirmed) throw new Error("Removing one local memory entry requires --confirm")
+  const path = memoryDatabasePath(input.stateDirectory ?? Global.Path.state)
+  if (!existsSync(path)) return undefined
+  const database = new Database(path)
+  try {
+    const removed = database.transaction(() => {
+      const entry = database
+        .query("SELECT id, title, value, created_at AS createdAt FROM nexus_memory WHERE id = $id")
+        .get({ $id: id }) as LocalMemoryEntry | null
+      if (!entry) return undefined
+      database.query("DELETE FROM nexus_memory WHERE id = $id").run({ $id: id })
+      return entry
+    })()
+    return removed ?? undefined
+  } finally {
+    database.close()
+  }
+}
+
 export function formatMemoryStatus(status: LocalMemoryStatus, format: "table" | "json"): string {
   if (format === "json") return JSON.stringify(status, null, 2)
   return [
@@ -155,6 +200,35 @@ export const MemoryListCommand = cmd({
   },
 })
 
+export const MemoryShowCommand = cmd({
+  command: "show <id>",
+  describe: "show one explicit local memory entry by ID without changing it",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", describe: "positive local memory entry ID" })
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
+  handler(args: { id: number; format?: "table" | "json" }) {
+    const entry = getLocalMemory({ id: args.id })
+    if (!entry) throw new Error(`No local memory entry exists for ID ${args.id}`)
+    process.stdout.write(formatMemoryList([entry], args.format ?? "table") + EOL)
+  },
+})
+
+export const MemoryRemoveCommand = cmd({
+  command: "remove <id>",
+  aliases: ["delete"],
+  describe: "remove exactly one local memory entry only after explicit confirmation",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", describe: "positive local memory entry ID" })
+      .option("confirm", { type: "boolean", default: false, describe: "confirm this one-entry local deletion" }),
+  handler(args: { id: number; confirm?: boolean }) {
+    const removed = removeLocalMemory({ id: args.id, confirmed: args.confirm === true })
+    if (!removed) throw new Error(`No local memory entry exists for ID ${args.id}; no deletion was performed`)
+    process.stdout.write(`Removed local memory entry #${removed.id}. No other memory entries were changed.${EOL}`)
+  },
+})
+
 export const MemoryStatusCommand = cmd({
   command: "status",
   describe: "show local memory storage status without creating it",
@@ -168,6 +242,13 @@ export const MemoryCommand = cmd({
   command: "memory",
   aliases: ["memories"],
   describe: "manage explicit local-only cross-session memory entries",
-  builder: (yargs) => yargs.command(MemoryAddCommand).command(MemoryListCommand).command(MemoryStatusCommand).demandCommand(),
+  builder: (yargs) =>
+    yargs
+      .command(MemoryAddCommand)
+      .command(MemoryListCommand)
+      .command(MemoryShowCommand)
+      .command(MemoryRemoveCommand)
+      .command(MemoryStatusCommand)
+      .demandCommand(),
   async handler() {},
 })
