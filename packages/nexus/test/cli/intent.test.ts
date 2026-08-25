@@ -174,4 +174,16 @@ describe("local intent inspection", () => {
     expect(ambiguous.execution).toBe("blocked")
     expect(ambiguous.reason).toContain("exactly two distinct supported languages")
   })
+
+  test("executes informational local-model guidance and redacted known-alias route preview only", async () => {
+    const localCatalog = await executeLocalIntent("local model catalog dikhao")
+    const route = await executeLocalIntent("deepseek model route dikhao")
+    const unknownRoute = await executeLocalIntent("my-private-model route dikhao")
+
+    expect(localCatalog).toMatchObject({ category: "local-model", execution: "executed" })
+    expect(localCatalog.result).toContain("no download or local-model runtime was started")
+    expect(route).toMatchObject({ category: "model-route", execution: "executed" })
+    expect(route.result).toContain("Preview only: no provider contacted, key validated, vault changed, route selected, or task started")
+    expect(unknownRoute).toMatchObject({ category: "unknown", execution: "blocked" })
+  })
 })

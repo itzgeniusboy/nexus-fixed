@@ -1,7 +1,7 @@
 import { EOL } from "node:os"
 import { cmd } from "./cmd"
-import { apiVaultKeyPath, apiVaultRows, getApiUsageBudget, getApiVaultStatus } from "../../api/ApiVault"
-import { formatApiReadiness, formatApiUsageBudget, formatApiVaultList } from "./api"
+import { apiVaultKeyPath, apiVaultPublicRows, apiVaultRows, getApiUsageBudget, getApiVaultStatus } from "../../api/ApiVault"
+import { formatApiReadiness, formatApiRoutePreview, formatApiUsageBudget, formatApiVaultList } from "./api"
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
@@ -13,6 +13,9 @@ import {
   translationLanguages,
   type TranslationLanguage,
 } from "./translator"
+import { getDeviceConfig } from "@nexus-ai/core/device"
+import { formatLocalModelCatalog, formatLocalModelRecommendations } from "./local-models"
+import { routeModel } from "../../api/ModelRouter"
 
 const MAX_INTENT_INPUT_LENGTH = 1_000
 
@@ -28,6 +31,8 @@ export type IntentInspection = {
     | "permission"
     | "device"
     | "instructions"
+    | "local-model"
+    | "model-route"
     | "termux"
     | "voice"
     | "webtest"
@@ -93,6 +98,20 @@ const intentRules: readonly IntentRule[] = [
     category: "api-status",
     plugin: "api",
     command: "readiness",
+  },
+  {
+    pattern:
+      /(?:local|offline|device).*(?:model).*(?:catalog|recommendations?|recommend|suggest|ram|storage|gpu|download)|(?:catalog|recommendations?|recommend|suggest).*(?:local|offline|device).*(?:model)/i,
+    category: "local-model",
+    plugin: "models",
+    command: "local recommendations",
+  },
+  {
+    pattern:
+      /(?:deepseek|llama\s*3(?:\.1)?|gemini|gpt\s*-?4).*(?:model\s*)?(?:route|fallback|provider)|(?:route|fallback|provider).*(?:deepseek|llama\s*3(?:\.1)?|gemini|gpt\s*-?4)/i,
+    category: "model-route",
+    plugin: "api",
+    command: "route preview",
   },
   {
     pattern:
@@ -234,6 +253,14 @@ function requestedTranslationLanguages(value: string): { source: TranslationLang
   return { source: found[0], target: found[1] }
 }
 
+function requestedKnownModelAlias(value: string): "deepseek" | "llama3_1" | "gemini" | "gpt4" | undefined {
+  if (/\bdeepseek\b/i.test(value)) return "deepseek"
+  if (/\bllama\s*3(?:\.1)?\b/i.test(value)) return "llama3_1"
+  if (/\bgemini\b/i.test(value)) return "gemini"
+  if (/\bgpt\s*-?4\b/i.test(value)) return "gpt4"
+  return undefined
+}
+
 /**
  * Executes only a literal allowlist of local read-only formatters. It never shells out,
  * loads plugins, calls a model/provider, validates keys, changes vault/route state, or
@@ -306,6 +333,25 @@ export async function executeLocalIntent(value: string): Promise<IntentExecution
       }
     } catch {
       return blockedExecution(inspection, "The current project could not be inventoried within the bounded local plan.")
+    }
+  }
+  if (inspection.category === "local-model" && inspection.command === "local recommendations") {
+    const config = getDeviceConfig()
+    return {
+      ...inspection,
+      execution: "executed",
+      result: /\bcatalog\b/i.test(value)
+        ? formatLocalModelCatalog(config)
+        : formatLocalModelRecommendations(config).join(EOL),
+    }
+  }
+  if (inspection.category === "model-route" && inspection.command === "route preview") {
+    const alias = requestedKnownModelAlias(value)
+    if (!alias) return blockedExecution(inspection, "Name one supported route alias: deepseek, llama 3.1, gemini, or gpt-4.")
+    return {
+      ...inspection,
+      execution: "executed",
+      result: formatApiRoutePreview({ model: alias, routes: routeModel(alias), rows: apiVaultPublicRows() }),
     }
   }
   if (inspection.category === "device" && inspection.command === "readiness") {
