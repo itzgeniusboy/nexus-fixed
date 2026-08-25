@@ -1,12 +1,24 @@
 import { EOL } from "node:os"
 import { cmd } from "./cmd"
+import { Effect } from "effect"
 import { apiVaultKeyPath, apiVaultPublicRows, apiVaultRows, getApiUsageBudget, getApiVaultStatus } from "../../api/ApiVault"
 import { formatApiReadiness, formatApiRoutePreview, formatApiUsageBudget, formatApiVaultList } from "./api"
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
 import { formatMemoryList, formatMemoryStatus, getLocalMemory, listLocalMemories, memoryStatus } from "./memory"
-import { clearWorkspaceSelection, formatWorkspaceSelection, readWorkspaceSelection } from "./workspace"
+import {
+  clearWorkspaceSelection,
+  formatWorkspaceDetail,
+  formatWorkspaceList,
+  formatWorkspaceSelection,
+  readWorkspaceSelection,
+} from "./workspace"
+import {
+  formatPermissionInspection,
+  inspectablePermissionCategories,
+  type InspectablePermissionCategory,
+} from "./permission"
 import {
   collectTranslationFiles,
   createTranslationPlan,
@@ -18,6 +30,8 @@ import {
 import { getDeviceConfig } from "@nexus-ai/core/device"
 import { formatLocalModelCatalog, formatLocalModelRecommendations } from "./local-models"
 import { routeModel } from "../../api/ModelRouter"
+import { Permission } from "@/permission"
+import { Project } from "@/project/project"
 
 const MAX_INTENT_INPUT_LENGTH = 1_000
 const CONFIRMED_TRANSLATION_REPORT = ".nexus-translation-plan.json"
@@ -279,6 +293,10 @@ export type IntentExecutionOptions = {
   memoryStateDirectory?: string
   workspaceSelectionDirectory?: string
   translationRoot?: string
+  /** Test-only existing registry fixture; production uses the initialized local Project service. */
+  workspaceProjects?: () => Promise<Project.Info[]>
+  /** Test-only fixed-category formatter; production reads the initialized local permission configuration. */
+  permissionExplanation?: (category: InspectablePermissionCategory) => Promise<string>
 }
 
 function roleNamedIn(value: string): SpecialistRoleName | undefined {
@@ -318,6 +336,53 @@ function requestedMemoryID(value: string): number | undefined {
     if (match) return Number(match[1])
   }
   return undefined
+}
+
+function hasUnsafeWorkspaceExecutionWording(value: string): boolean {
+  return /(?:\b(?:select|rename|clear|delete|remove|set|change|switch|write|save|config|source|session|shell|directory|path)\b|[\\/]|--)/i.test(
+    value,
+  )
+}
+
+function requestedPermissionCategory(value: string): InspectablePermissionCategory | undefined {
+  const found = inspectablePermissionCategories.filter((category) => new RegExp(`\\b${category}\\b`, "i").test(value))
+  return found.length === 1 ? found[0] : undefined
+}
+
+function hasUnsafePermissionExplanationWording(value: string): boolean {
+  return /(?:[\\/]|--|\b(?:command|path|rule|pattern|edit|write|save|set|change|run|execute)\b)/i.test(value)
+}
+
+function knownWorkspaceID(value: string, projects: Project.Info[]): string | undefined {
+  const normalized = value.toLowerCase()
+  const matches = projects.filter((project) => {
+    const id = project.id.toLowerCase()
+    return new RegExp(`(?:^|[^a-z0-9_-])${id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[^a-z0-9_-])`).test(normalized)
+  })
+  return matches.length === 1 ? matches[0].id : undefined
+}
+
+async function localWorkspaceProjects(options: IntentExecutionOptions): Promise<Project.Info[]> {
+  if (options.workspaceProjects) return options.workspaceProjects()
+  const { AppRuntime } = await import("@/effect/app-runtime")
+  return AppRuntime.runPromise(Project.Service.use((service) => service.list()))
+}
+
+async function localPermissionExplanation(
+  category: InspectablePermissionCategory,
+  options: IntentExecutionOptions,
+): Promise<string> {
+  if (options.permissionExplanation) return options.permissionExplanation(category)
+  const { AppRuntime } = await import("@/effect/app-runtime")
+  const { Config } = await import("@/config/config")
+  return AppRuntime.runPromise(
+    Config.Service.use((config) => config.get()).pipe(
+      Effect.map((config) => {
+        const project = config.permission ? Permission.fromConfig(config.permission) : []
+        return formatPermissionInspection(Permission.explainDecision({ permission: category, pattern: "*", project }))
+      }),
+    ),
+  )
 }
 
 /**
@@ -385,6 +450,20 @@ export async function executeLocalIntent(value: string, options: IntentExecution
       return role
         ? { ...inspection, execution: "executed", result: formatSpecialistRole(role, "table") }
         : blockedExecution(inspection, "Name one supported role: planner, coder, reviewer, or tester.")
+    }
+  }
+  if (inspection.category === "permission" && inspection.command === "explain") {
+    const category = requestedPermissionCategory(value)
+    if (!category || hasUnsafePermissionExplanationWording(value)) {
+      return blockedExecution(
+        inspection,
+        "Name exactly one safe permission category (bash, edit, read, webfetch, or question) without a command, path, rule, or edit request.",
+      )
+    }
+    try {
+      return { ...inspection, execution: "executed", result: await localPermissionExplanation(category, options) }
+    } catch {
+      return blockedExecution(inspection, "The local fixed-category permission explanation could not be read; no rule or configuration changed.")
     }
   }
   if (inspection.category === "translation" && (inspection.command === "plan" || inspection.command === "confirmed report")) {
@@ -467,6 +546,33 @@ export async function executeLocalIntent(value: string, options: IntentExecution
     if (inspection.command === "status") {
       const directory = process.cwd()
       return { ...inspection, execution: "executed", result: formatInstructionStatus(directory, directory) }
+    }
+  }
+  if (inspection.category === "workspace" && (inspection.command === "list" || inspection.command === "show")) {
+    if (hasUnsafeWorkspaceExecutionWording(value)) {
+      return blockedExecution(
+        inspection,
+        "Workspace execution accepts only bounded known-project list or one exact ID show wording; no path, selection, shell, session, or write request was run.",
+      )
+    }
+    try {
+      const projects = await localWorkspaceProjects(options)
+      if (inspection.command === "list") {
+        return { ...inspection, execution: "executed", result: formatWorkspaceList(projects, "table") }
+      }
+      const projectID = knownWorkspaceID(value, projects)
+      if (!projectID) {
+        return blockedExecution(
+          inspection,
+          "State exactly one existing normalized workspace ID from the local known-project list; no directory was scanned, selected, or changed.",
+        )
+      }
+      const project = projects.find((item) => item.id === projectID)
+      return project
+        ? { ...inspection, execution: "executed", result: formatWorkspaceDetail(project, "table") }
+        : blockedExecution(inspection, "The requested known workspace was unavailable; no directory was scanned or changed.")
+    } catch {
+      return blockedExecution(inspection, "The local known-project registry could not be read; no discovery scan, selection, or state change occurred.")
     }
   }
   if (inspection.category === "workspace" && inspection.command === "selected") {

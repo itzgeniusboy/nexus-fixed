@@ -207,7 +207,7 @@ describe("local intent inspection", () => {
     expect(unnamed.reason).toContain("Name one supported role")
   })
 
-  test("runs bounded device readiness locally but blocks sensitive and non-allowlisted routes", async () => {
+  test("runs bounded device readiness and known-workspace list locally but blocks sensitive routes", async () => {
     const device = await executeLocalIntent("Termux device readiness memory storage dikhao")
     const sensitive = await executeLocalIntent("API key: sk_very-secret-value-123456789")
     const workspace = await executeLocalIntent("workspace ke project list dikhao")
@@ -216,8 +216,62 @@ describe("local intent inspection", () => {
     expect(device.result).toContain("Observed local signals only")
     expect(sensitive).toMatchObject({ category: "sensitive-input", execution: "blocked" })
     expect(JSON.stringify(sensitive)).not.toContain("very-secret")
-    expect(workspace).toMatchObject({ category: "workspace", execution: "blocked" })
-    expect(formatIntentExecution(workspace, "table")).toContain("not in the explicit read-only execution allowlist")
+    expect(workspace).toMatchObject({ category: "workspace", command: "list", execution: "executed" })
+    expect(workspace.result).toContain("No known local projects")
+    expect(formatIntentExecution(workspace, "table")).toContain("completed locally (read-only)")
+  })
+
+  test("executes only bounded known-workspace list and exact-ID detail without discovery, selection, or writes", async () => {
+    const projects = [
+      {
+        id: "known-project",
+        name: "Known local project",
+        vcs: "git",
+        time: { updated: 1 },
+        sandboxes: [],
+        worktree: "/safe/local/project",
+      },
+    ] as any
+    const options = { workspaceProjects: async () => projects }
+    const listed = await executeLocalIntent("workspace project list dikhao", options)
+    const shown = await executeLocalIntent("workspace show known-project details", options)
+    const unknown = await executeLocalIntent("workspace show unknown-project details", options)
+    const path = await executeLocalIntent("workspace show known-project path dikhao", options)
+    const mutation = await executeLocalIntent("workspace show known-project select kar do", options)
+
+    expect(listed).toMatchObject({ category: "workspace", command: "list", execution: "executed" })
+    expect(listed.result).toContain("Known local project")
+    expect(listed.result).not.toContain("/safe/local/project")
+    expect(shown).toMatchObject({ category: "workspace", command: "show", execution: "executed" })
+    expect(shown.result).toContain("Project ID: known-project")
+    expect(shown.result).toContain("Read-only detail")
+    expect(unknown).toMatchObject({ execution: "blocked" })
+    expect(unknown.reason).toContain("exactly one existing normalized workspace ID")
+    expect(path).toMatchObject({ execution: "blocked" })
+    expect(path.reason).toContain("no path, selection, shell, session, or write request")
+    expect(mutation).toMatchObject({ execution: "blocked" })
+  })
+
+  test("executes one fixed permission category only and rejects paths, rule details, and multiple categories", async () => {
+    const calls: string[] = []
+    const options = {
+      permissionExplanation: async (category: "bash" | "edit" | "read" | "webfetch" | "question") => {
+        calls.push(category)
+        return `Permission: ${category}\nScope: category-wide only`
+      },
+    }
+    const bash = await executeLocalIntent("bash permission denied kyu hai", options)
+    const multiple = await executeLocalIntent("bash read permission explain karo", options)
+    const rule = await executeLocalIntent("bash permission rule explain karo", options)
+    const path = await executeLocalIntent("bash permission /tmp/example explain karo", options)
+
+    expect(bash).toMatchObject({ category: "permission", command: "explain", execution: "executed" })
+    expect(bash.result).toContain("Permission: bash")
+    expect(calls).toEqual(["bash"])
+    for (const blocked of [multiple, rule, path]) {
+      expect(blocked).toMatchObject({ category: "permission", execution: "blocked" })
+      expect(blocked.reason).toContain("exactly one safe permission category")
+    }
   })
 
   test("executes fixed-root instruction transparency without accepting a user-supplied path", async () => {
@@ -231,13 +285,13 @@ describe("local intent inspection", () => {
     expect(status.result).not.toContain("NEXUS.md instruction precedence explain karo")
   })
 
-  test("executes workspace selection bookmark inspection but keeps workspace list blocked", async () => {
+  test("executes workspace selection bookmark inspection and bounded workspace list without mutation", async () => {
     const selected = await executeLocalIntent("current selected workspace dikhao")
     const listed = await executeLocalIntent("workspace ke project list dikhao")
 
     expect(selected.execution).toBe("executed")
     expect(selected.result).toContain("This does not affect the current shell directory")
-    expect(listed.execution).toBe("blocked")
+    expect(listed).toMatchObject({ category: "workspace", command: "list", execution: "executed" })
   })
 
   test("executes a bounded current-project translation plan only for an explicit language pair", async () => {
