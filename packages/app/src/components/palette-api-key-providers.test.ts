@@ -2,12 +2,30 @@ import { describe, expect, test } from "bun:test"
 import { NEXUS_API_KEY_PROVIDERS, rankedApiKeyProviders } from "./palette-api-key-providers"
 
 describe("NEXUS API provider picker policy", () => {
-  test("ranks the source-backed recurring allocation before account-specific and unknown access", () => {
+  test("ranks source-backed recurring free access before conditional and account-specific access", () => {
     const ranked = rankedApiKeyProviders()
-    expect(ranked.map((provider) => provider.id).slice(0, 2)).toEqual(["cloudflare-workers-ai", "nvidia-nim"])
+    expect(ranked.map((provider) => provider.id).slice(0, 5)).toEqual([
+      "cloudflare-workers-ai",
+      "groq",
+      "gemini",
+      "openrouter",
+      "nvidia-nim",
+    ])
     expect(ranked.find((provider) => provider.id === "cloudflare-workers-ai")).toMatchObject({
       access: "verified-recurring",
       badge: "Verified daily allocation",
+    })
+    expect(ranked.find((provider) => provider.id === "groq")).toMatchObject({
+      access: "verified-recurring",
+      badge: "Free plan — model limits",
+    })
+    expect(ranked.find((provider) => provider.id === "gemini")).toMatchObject({
+      access: "verified-recurring",
+      badge: "Free tier — project/model limits",
+    })
+    expect(ranked.find((provider) => provider.id === "openrouter")).toMatchObject({
+      access: "conditional-free",
+      badge: "Conditional free models",
     })
     expect(ranked.find((provider) => provider.id === "nvidia-nim")).toMatchObject({
       access: "account-specific",
