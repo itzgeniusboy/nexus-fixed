@@ -26,6 +26,48 @@ function printError(error: unknown): void {
 
 import { checkKey } from "../../api/ApiVault"
 
+type ApiVaultListInput = {
+  vaultPath: string
+  autoRotate: boolean
+  budget: ReturnType<typeof getApiUsageBudget>
+  rows: ReturnType<typeof apiVaultRows>
+  now?: number
+}
+
+/** Formats masked local vault evidence; it intentionally cannot report upstream account state. */
+export function formatApiVaultList(input: ApiVaultListInput): string {
+  const now = input.now ?? Date.now()
+  const lines = [
+    `Vault: ${input.vaultPath}`,
+    `Auto-rotation: ${input.autoRotate ? "on" : "off"}`,
+    `Local caps: task ${input.budget.maxRequestsPerTask ?? "off"} req / ${input.budget.maxTokensPerTask ?? "off"} tok; day ${input.budget.maxRequestsPerDay ?? "off"} req / ${input.budget.maxTokensPerDay ?? "off"} tok (NEXUS-observed usage only)`,
+  ]
+  if (input.rows.length === 0) {
+    lines.push("No API keys stored. Add one with: nexus api add <provider> <key> [label]")
+    return lines.join("\n")
+  }
+
+  lines.push("Provider\t#\tLabel\tKey\tStatus\tHealth\tNEXUS observed today")
+  for (const row of input.rows) {
+    const cooling = row.cooldownUntil && Date.parse(row.cooldownUntil) > now
+    const health =
+      [
+        cooling ? "cooldown" : undefined,
+        row.lastFailure ? `last:${row.lastFailure}` : undefined,
+        row.lastLatencyMs !== undefined ? `${row.lastLatencyMs}ms` : undefined,
+      ]
+        .filter(Boolean)
+        .join(",") || "—"
+    lines.push(
+      `${row.provider}\t${row.index}\t${row.label}\t${row.key}\t${row.status}\t${health}\t${row.usage.todayRequests} req / ${row.usage.todayInputTokens + row.usage.todayOutputTokens} tok`,
+    )
+  }
+  lines.push(
+    "Usage shown is local NEXUS-observed activity only; it is not a provider balance, remaining quota, account token allocation, or cost reading.",
+  )
+  return lines.join("\n")
+}
+
 async function runWizard(): Promise<void> {
   prompts.intro("Add your API key")
   prompts.log.info("Har provider ke liye key paste karo — skip karne ke liye bas ENTER.")
@@ -128,30 +170,9 @@ const ListCommand = cmd({
     const rows = apiVaultRows()
     const config = getApiVaultStatus()
     const budget = getApiUsageBudget()
-    process.stdout.write(`Vault: ${apiVaultKeyPath()}\n`)
-    process.stdout.write(`Auto-rotation: ${config.autoRotate ? "on" : "off"}\n`)
     process.stdout.write(
-      `Local caps: task ${budget.maxRequestsPerTask ?? "off"} req / ${budget.maxTokensPerTask ?? "off"} tok; day ${budget.maxRequestsPerDay ?? "off"} req / ${budget.maxTokensPerDay ?? "off"} tok (observed usage only)\n`,
+      formatApiVaultList({ vaultPath: apiVaultKeyPath(), autoRotate: config.autoRotate, budget, rows }) + "\n",
     )
-    if (rows.length === 0) {
-      process.stdout.write("No API keys stored. Add one with: nexus api add <provider> <key> [label]\n")
-      return
-    }
-    process.stdout.write("Provider\t#\tLabel\tKey\tStatus\tHealth\tToday\n")
-    for (const row of rows) {
-      const cooling = row.cooldownUntil && Date.parse(row.cooldownUntil) > Date.now()
-      const health =
-        [
-          cooling ? "cooldown" : undefined,
-          row.lastFailure ? `last:${row.lastFailure}` : undefined,
-          row.lastLatencyMs !== undefined ? `${row.lastLatencyMs}ms` : undefined,
-        ]
-          .filter(Boolean)
-          .join(",") || "—"
-      process.stdout.write(
-        `${row.provider}\t${row.index}\t${row.label}\t${row.key}\t${row.status}\t${health}\t${row.usage.todayRequests} req / ${row.usage.todayInputTokens + row.usage.todayOutputTokens} tok\n`,
-      )
-    }
   },
 })
 
