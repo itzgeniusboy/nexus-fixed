@@ -14,6 +14,10 @@ export type WorkspaceSummary = {
   sandboxCount: number
 }
 
+export type WorkspaceDetail = WorkspaceSummary & {
+  worktree: string
+}
+
 function safeWorkspaceName(value: string | undefined): string {
   const normalized = (value ?? "")
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
@@ -29,6 +33,16 @@ export function workspaceSummary(project: Project.Info): WorkspaceSummary {
     vcs: project.vcs ?? "none",
     updated: project.time.updated,
     sandboxCount: project.sandboxes.length,
+  }
+}
+
+export function workspaceDetail(project: Project.Info): WorkspaceDetail {
+  return {
+    ...workspaceSummary(project),
+    worktree: project.worktree
+      .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim(),
   }
 }
 
@@ -50,6 +64,20 @@ export function formatWorkspaceList(projects: Project.Info[], format: "table" | 
     )
   }
   return lines.join(EOL)
+}
+
+export function formatWorkspaceDetail(project: Project.Info, format: "table" | "json"): string {
+  const detail = workspaceDetail(project)
+  if (format === "json") return JSON.stringify(detail, null, 2)
+  return [
+    `Project ID: ${detail.id}`,
+    `Name: ${detail.name}`,
+    `VCS: ${detail.vcs}`,
+    `Worktree: ${detail.worktree}`,
+    `Sandboxes: ${detail.sandboxCount}`,
+    `Updated: ${new Date(detail.updated).toISOString()}`,
+    "Read-only detail: no project metadata, directory, source file, configuration, or selection state changed.",
+  ].join(EOL)
 }
 
 function posixShellLiteral(value: string): string {
@@ -105,9 +133,35 @@ export const WorkspaceCdCommand = effectCmd({
   }),
 })
 
+export const WorkspaceShowCommand = effectCmd({
+  command: "show <projectID>",
+  describe: "show explicit safe detail for one known local project without changing it",
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .positional("projectID", {
+        describe: "project ID from `nexus workspace list`",
+        type: "string",
+        demandOption: true,
+      })
+      .option("format", {
+        describe: "output format",
+        type: "string",
+        choices: ["table", "json"],
+        default: "table",
+      }),
+  handler: Effect.fn("Cli.workspace.show")(function* (args: { projectID?: string; format?: "table" | "json" }) {
+    if (!args.projectID) return yield* fail("Project ID is required")
+    const project = yield* Project.Service.use((service) => service.get(ProjectV2.ID.make(args.projectID)))
+    if (!project) return yield* fail(`Known project not found: ${args.projectID}`)
+    process.stdout.write(formatWorkspaceDetail(project, args.format ?? "table") + EOL)
+  }),
+})
+
 export const WorkspaceCommand = cmd({
   command: "workspace",
   describe: "discover and navigate NEXUS-known local projects without changing them",
-  builder: (yargs) => yargs.command(WorkspaceListCommand).command(WorkspaceCdCommand).demandCommand(),
+  builder: (yargs) =>
+    yargs.command(WorkspaceListCommand).command(WorkspaceCdCommand).command(WorkspaceShowCommand).demandCommand(),
   async handler() {},
 })

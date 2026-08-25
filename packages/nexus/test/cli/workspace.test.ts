@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { formatWorkspaceList, workspaceNavigationCommand, workspaceSummary } from "../../src/cli/cmd/workspace"
+import {
+  formatWorkspaceDetail,
+  formatWorkspaceList,
+  workspaceNavigationCommand,
+  workspaceSummary,
+} from "../../src/cli/cmd/workspace"
 
 describe("workspace CLI safety", () => {
   const project = {
@@ -29,6 +34,16 @@ describe("workspace CLI safety", () => {
     expect(output).toContain("Demo [31mapp")
     expect(output).not.toContain("\u001b")
     expect(output).not.toContain("\n\u001b[31m")
+  })
+
+  test("shows selected project detail explicitly without a mutation claim", () => {
+    const table = formatWorkspaceDetail(project, "table")
+    const json = formatWorkspaceDetail(project, "json")
+
+    expect(table).toContain("Project ID: proj_safe")
+    expect(table).toContain("Worktree: /private/workspaces/demo project's app")
+    expect(table).toContain("Read-only detail: no project metadata")
+    expect(json).toContain('"worktree": "/private/workspaces/demo project\'s app"')
   })
 
   test("prints a shell-escaped copy-only navigation command for an explicitly selected project", () => {
