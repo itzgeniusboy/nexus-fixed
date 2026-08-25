@@ -94,26 +94,46 @@ function gib(bytes: number) {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GiB`
 }
 
-export function formatAgentCapabilityStatus(status: AgentCapabilityStatus, format: "table" | "json"): string {
-  if (format === "json") return JSON.stringify(status, null, 2)
-  const lines = [
-    "Learning records",
-    `  Proposals: proposed ${status.learning.proposals.proposed} · approved ${status.learning.proposals.approved} · rejected ${status.learning.proposals.rejected} · superseded ${status.learning.proposals.superseded}`,
-    `  Approved skill revisions: ${status.learning.approvedSkillRevisions}`,
-    "  Boundary: learning stays proposed until a user explicitly approves it; no prompt, session, or file was learned automatically.",
-    "Scheduler capability",
-    `  Local definitions: ${status.scheduler.definitions} · enabled ${status.scheduler.enabledDefinitions} · disabled ${status.scheduler.disabledDefinitions}`,
-    "  Boundary: this inspection did not create a schedule, start a worker, poll, or claim/run any scheduled job.",
-    "Subagent capacity",
-    `  Roles: ${status.subagents.roles.map((role) => `${role.name} (${role.basePolicy})`).join(", ")}`,
-    `  Local plan policy bounds: children ${status.subagents.policyBounds.maxChildren} · parallel ${status.subagents.policyBounds.maxParallel} · parallel must not exceed lead plus children`,
-    `  Observed device profile: ${status.subagents.observedDevice.platform} · ${status.subagents.observedDevice.architecture} · ${status.subagents.observedDevice.cpuCores} CPU cores · ${gib(status.subagents.observedDevice.freeMemoryBytes)} free / ${gib(status.subagents.observedDevice.totalMemoryBytes)} total memory`,
-    `  Durable plans recorded: ${status.subagents.durablePlans}`,
-    "  Boundary: this is observed local metadata only; no agent was started, delegated, queued, or given a model task.",
-    "Gateway readiness",
-    `  Registered profiles: ${status.gateway.registeredConnections} · enabled ${status.gateway.enabledConnections} · local ${status.gateway.localProfiles} · hosted ${status.gateway.hostedProfiles}`,
-    `  Foreground local state: ${status.gateway.foregroundState}`,
-    "  Boundary: no credential, sender, connection ID, label, listener, remote connection, message, schedule execution, or token was displayed or started.",
-  ]
+export const agentCapabilitySections = ["learning", "scheduler", "subagents", "gateway"] as const
+export type AgentCapabilitySection = (typeof agentCapabilitySections)[number]
+
+function capabilitySectionLines(status: AgentCapabilityStatus): Record<AgentCapabilitySection, string[]> {
+  return {
+    learning: [
+      "Learning records",
+      `  Proposals: proposed ${status.learning.proposals.proposed} · approved ${status.learning.proposals.approved} · rejected ${status.learning.proposals.rejected} · superseded ${status.learning.proposals.superseded}`,
+      `  Approved skill revisions: ${status.learning.approvedSkillRevisions}`,
+      "  Boundary: learning stays proposed until a user explicitly approves it; no prompt, session, or file was learned automatically.",
+    ],
+    scheduler: [
+      "Scheduler capability",
+      `  Local definitions: ${status.scheduler.definitions} · enabled ${status.scheduler.enabledDefinitions} · disabled ${status.scheduler.disabledDefinitions}`,
+      "  Boundary: this inspection did not create a schedule, start a worker, poll, or claim/run any scheduled job.",
+    ],
+    subagents: [
+      "Subagent capacity",
+      `  Roles: ${status.subagents.roles.map((role) => `${role.name} (${role.basePolicy})`).join(", ")}`,
+      `  Local plan policy bounds: children ${status.subagents.policyBounds.maxChildren} · parallel ${status.subagents.policyBounds.maxParallel} · parallel must not exceed lead plus children`,
+      `  Observed device profile: ${status.subagents.observedDevice.platform} · ${status.subagents.observedDevice.architecture} · ${status.subagents.observedDevice.cpuCores} CPU cores · ${gib(status.subagents.observedDevice.freeMemoryBytes)} free / ${gib(status.subagents.observedDevice.totalMemoryBytes)} total memory`,
+      `  Durable plans recorded: ${status.subagents.durablePlans}`,
+      "  Boundary: this is observed local metadata only; no agent was started, delegated, queued, or given a model task.",
+    ],
+    gateway: [
+      "Gateway readiness",
+      `  Registered profiles: ${status.gateway.registeredConnections} · enabled ${status.gateway.enabledConnections} · local ${status.gateway.localProfiles} · hosted ${status.gateway.hostedProfiles}`,
+      `  Foreground local state: ${status.gateway.foregroundState}`,
+      "  Boundary: no credential, sender, connection ID, label, listener, remote connection, message, schedule execution, or token was displayed or started.",
+    ],
+  }
+}
+
+export function formatAgentCapabilityStatus(
+  status: AgentCapabilityStatus,
+  format: "table" | "json",
+  section?: AgentCapabilitySection,
+): string {
+  if (format === "json") return JSON.stringify(section ? { section, status: status[section] } : status, null, 2)
+  const sections = capabilitySectionLines(status)
+  const lines = section ? sections[section] : agentCapabilitySections.flatMap((item) => sections[item])
   return lines.join(EOL)
 }

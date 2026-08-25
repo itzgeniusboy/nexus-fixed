@@ -16,8 +16,9 @@ import { clearLocalGatewayState, defaultLocalGatewayStatePath, gatewayCredential
 import { planGatewayRun } from "../../agent-platform/gateway"
 import { SecretStore } from "@nexus-ai/assistant/core/secret-store"
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
-import { agentCapabilityStatus, formatAgentCapabilityStatus } from "./agent-status"
+import { agentCapabilitySections, agentCapabilityStatus, formatAgentCapabilityStatus, type AgentCapabilitySection } from "./agent-status"
 import { collectDeviceReadiness } from "./device"
+import { createAgentPlanPreview, formatAgentPlanPreview } from "./agent-plan-preview"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -670,8 +671,11 @@ const AgentRunCommand = cmd({
 const AgentStatusCommand = cmd({
   command: "status",
   describe: "inspect local learning, scheduler, subagent, and gateway capability metadata without starting anything",
-  builder: (yargs) => yargs.option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
-  async handler(args: { format?: "table" | "json" }) {
+  builder: (yargs) =>
+    yargs
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" })
+      .option("section", { choices: agentCapabilitySections, describe: "inspect exactly one redacted capability area" }),
+  async handler(args: { format?: "table" | "json"; section?: AgentCapabilitySection }) {
     const store = new AgentPlatformStore()
     try {
       const status = agentCapabilityStatus({
@@ -683,7 +687,7 @@ const AgentStatusCommand = cmd({
         device: await collectDeviceReadiness(),
         localGatewayState: readLocalGatewayState(),
       })
-      process.stdout.write(formatAgentCapabilityStatus(status, args.format ?? "table") + EOL)
+      process.stdout.write(formatAgentCapabilityStatus(status, args.format ?? "table", args.section) + EOL)
     } catch (error) {
       platformError(error)
     } finally {
@@ -692,9 +696,31 @@ const AgentStatusCommand = cmd({
   },
 })
 
+const AgentPlanPreviewCommand = cmd({
+  command: "plan-preview <role>",
+  describe: "preview a bounded local subagent policy without creating a run or starting work",
+  builder: (yargs) =>
+    yargs
+      .positional("role", { choices: specialistRoleNames, describe: "existing specialist role to inspect" })
+      .option("children", { type: "number", default: 0, describe: "maximum child agents to preview, from 0 to 12" })
+      .option("parallel", { type: "number", default: 1, describe: "maximum total parallel agents to preview, from 1 to 12" })
+      .option("budget", { choices: ["low", "standard", "high"] as const, default: "standard", describe: "preview-only budget class" })
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
+  async handler(args: { role: SpecialistRoleName; children?: number; parallel?: number; budget?: "low" | "standard" | "high"; format?: "table" | "json" }) {
+    const preview = createAgentPlanPreview({
+      role: args.role,
+      children: args.children ?? 0,
+      parallel: args.parallel ?? 1,
+      budget: args.budget ?? "standard",
+      device: await collectDeviceReadiness(),
+    })
+    process.stdout.write(formatAgentPlanPreview(preview, args.format ?? "table") + EOL)
+  },
+})
+
 export const AgentCommand = cmd({
   command: "agent",
   describe: "manage agents",
-  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentRoleCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).command(AgentStatusCommand).demandCommand(),
+  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentRoleCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).command(AgentStatusCommand).command(AgentPlanPreviewCommand).demandCommand(),
   async handler() {},
 })

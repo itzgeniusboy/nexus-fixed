@@ -51,4 +51,16 @@ describe("agent capability status", () => {
     expect(parsed.gateway.foregroundState).toBe("not-recorded")
     expect(parsed.subagents.roles.map((role: { name: string }) => role.name)).toEqual(["planner", "coder", "reviewer", "tester"])
   })
+
+  test("formats one requested capability section without including other sections or private metadata", () => {
+    const formatted = formatAgentCapabilityStatus(agentCapabilityStatus(input), "table", "gateway")
+    expect(formatted).toContain("Gateway readiness")
+    expect(formatted).not.toContain("Learning records")
+    expect(formatted).not.toContain("Subagent capacity")
+    expect(formatted).not.toContain("private-label")
+    expect(JSON.parse(formatAgentCapabilityStatus(agentCapabilityStatus(input), "json", "learning"))).toMatchObject({
+      section: "learning",
+      status: { explicitApprovalRequired: true },
+    })
+  })
 })

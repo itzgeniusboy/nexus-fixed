@@ -4,6 +4,7 @@ import { Effect } from "effect"
 import { apiVaultKeyPath, apiVaultPublicRows, apiVaultRows, getApiUsageBudget, getApiVaultStatus } from "../../api/ApiVault"
 import { formatApiReadiness, formatApiRoutePreview, formatApiUsageBudget, formatApiVaultList } from "./api"
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
+import { agentCapabilityStatus, agentCapabilitySections, formatAgentCapabilityStatus, type AgentCapabilitySection, type AgentCapabilityStatus } from "./agent-status"
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
 import { formatMemoryList, formatMemoryStatus, getLocalMemory, listLocalMemories, memoryStatus } from "./memory"
@@ -32,6 +33,8 @@ import { formatLocalModelCatalog, formatLocalModelRecommendations } from "./loca
 import { routeModel } from "../../api/ModelRouter"
 import { Permission } from "@/permission"
 import { Project } from "@/project/project"
+import { AgentPlatformStore } from "../../agent-platform/store"
+import { readLocalGatewayState } from "../../agent-platform/gateway-local"
 
 const MAX_INTENT_INPUT_LENGTH = 1_000
 const CONFIRMED_TRANSLATION_REPORT = ".nexus-translation-plan.json"
@@ -46,6 +49,7 @@ export type IntentInspection = {
     | "version-control"
     | "api-status"
     | "agent-role"
+    | "agent-status"
     | "permission"
     | "device"
     | "instructions"
@@ -159,6 +163,13 @@ const intentRules: readonly IntentRule[] = [
     category: "api-status",
     plugin: "api",
     command: "list",
+  },
+  {
+    pattern:
+      /^(?!.*\b(?:create|add|approve|reject|revoke|enable|disable|run|start|stop|poll|send|connect|credential|token|set|write|save|edit|delete|remove|clear)\b)(?!.*\b(?:role|roles|planner|coder|reviewer|tester)\b)(?=.*\b(?:agent|learning|scheduler|schedule|subagent|subagents|sub-agent|gateway)\b)(?=.*\b(?:status|readiness|capacity|capability|state|inspect|check|dikhao|dekhao)\b).*$/i,
+    category: "agent-status",
+    plugin: "agent",
+    command: "status",
   },
   {
     pattern: /(?:agent\s*)?roles?.*(?:list|all|available|saare|sab)|(?:list|all|available|saare|sab).*(?:agent\s*)?roles?/i,
@@ -297,6 +308,8 @@ export type IntentExecutionOptions = {
   workspaceProjects?: () => Promise<Project.Info[]>
   /** Test-only fixed-category formatter; production reads the initialized local permission configuration. */
   permissionExplanation?: (category: InspectablePermissionCategory) => Promise<string>
+  /** Test-only local agent capability fixture; production only reads existing local metadata. */
+  agentCapabilityStatus?: () => Promise<AgentCapabilityStatus>
 }
 
 function roleNamedIn(value: string): SpecialistRoleName | undefined {
@@ -351,6 +364,39 @@ function requestedPermissionCategory(value: string): InspectablePermissionCatego
 
 function hasUnsafePermissionExplanationWording(value: string): boolean {
   return /(?:[\\/]|--|\b(?:command|path|rule|pattern|edit|write|save|set|change|run|execute)\b)/i.test(value)
+}
+
+function requestedAgentCapabilitySection(value: string): AgentCapabilitySection | undefined | "ambiguous" {
+  const matched = agentCapabilitySections.filter((section) => {
+    if (section === "scheduler") return /\b(?:scheduler|schedule)\b/i.test(value)
+    if (section === "subagents") return /\b(?:subagent|subagents|sub-agent|roles?)\b/i.test(value)
+    return new RegExp(`\\b${section}\\b`, "i").test(value)
+  })
+  return matched.length === 0 ? undefined : matched.length === 1 ? matched[0] : "ambiguous"
+}
+
+function hasUnsafeAgentCapabilityStatusWording(value: string): boolean {
+  return /(?:[\\/]|--|\b(?:create|add|approve|reject|revoke|enable|disable|run|start|stop|poll|send|connect|credential|token|set|write|save|edit|delete|remove|clear)\b)/i.test(
+    value,
+  )
+}
+
+async function localAgentCapabilityStatus(options: IntentExecutionOptions): Promise<AgentCapabilityStatus> {
+  if (options.agentCapabilityStatus) return options.agentCapabilityStatus()
+  const store = new AgentPlatformStore()
+  try {
+    return agentCapabilityStatus({
+      learning: store.listLearning(),
+      skillRevisions: store.listSkillRevisions(),
+      schedules: store.listSchedules(),
+      runs: store.listRuns(),
+      gateways: store.listGatewayConnections(),
+      device: await collectDeviceReadiness(),
+      localGatewayState: readLocalGatewayState(),
+    })
+  } finally {
+    store.close()
+  }
 }
 
 function knownWorkspaceID(value: string, projects: Project.Info[]): string | undefined {
@@ -441,6 +487,26 @@ export async function executeLocalIntent(value: string, options: IntentExecution
       return entry
         ? { ...inspection, execution: "executed", result: formatMemoryList([entry], "table") }
         : blockedExecution(inspection, `No local memory entry exists for ID ${id}; no storage was created or changed.`)
+    }
+  }
+  if (inspection.category === "agent-status" && inspection.command === "status") {
+    if (hasUnsafeAgentCapabilityStatusWording(value)) {
+      return blockedExecution(
+        inspection,
+        "Agent capability execution accepts status-only wording; no creation, approval, enablement, runtime, credential, or remote request was run.",
+      )
+    }
+    const section = requestedAgentCapabilitySection(value)
+    if (section === "ambiguous") {
+      return blockedExecution(
+        inspection,
+        "Name at most one capability area—learning, scheduler, subagents, or gateway—or request overall agent status.",
+      )
+    }
+    try {
+      return { ...inspection, execution: "executed", result: formatAgentCapabilityStatus(await localAgentCapabilityStatus(options), "table", section) }
+    } catch {
+      return blockedExecution(inspection, "The local agent capability metadata could not be read; no runtime, schedule, agent, gateway, or configuration state changed.")
     }
   }
   if (inspection.category === "agent-role") {

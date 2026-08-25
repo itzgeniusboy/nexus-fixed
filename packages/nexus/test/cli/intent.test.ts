@@ -207,6 +207,38 @@ describe("local intent inspection", () => {
     expect(unnamed.reason).toContain("Name one supported role")
   })
 
+  test("executes only explicit read-only agent capability status and blocks ambiguous or runtime wording", async () => {
+    let reads = 0
+    const capabilityStatus = {
+      learning: { proposals: { proposed: 1, approved: 0, rejected: 0, superseded: 0 }, approvedSkillRevisions: 0, explicitApprovalRequired: true },
+      scheduler: { definitions: 1, enabledDefinitions: 0, disabledDefinitions: 1, workerStartedByInspection: false, executionStartedByInspection: false },
+      subagents: {
+        roles: [],
+        durablePlans: 0,
+        policyBounds: { maxChildren: "0-12", maxParallel: "1-12", maxParallelRule: "lead-plus-children" },
+        observedDevice: { platform: "desktop", architecture: "x64", cpuCores: 4, totalMemoryBytes: 8, freeMemoryBytes: 4, observedOnly: true },
+        agentStartedByInspection: false,
+      },
+      gateway: { registeredConnections: 0, enabledConnections: 0, localProfiles: 0, hostedProfiles: 0, foregroundState: "not-recorded", listenerStartedByInspection: false, remoteConnectionStartedByInspection: false },
+    } as any
+    const options = { agentCapabilityStatus: async () => { reads += 1; return capabilityStatus } }
+    const overall = await executeLocalIntent("agent status dikhao", options)
+    const scheduler = await executeLocalIntent("scheduler status dikhao", options)
+    const ambiguous = await executeLocalIntent("agent learning scheduler status dikhao", options)
+    const runtime = await executeLocalIntent("agent gateway start status dikhao", options)
+
+    expect(overall).toMatchObject({ category: "agent-status", command: "status", execution: "executed" })
+    expect(overall.result).toContain("Learning records")
+    expect(overall.result).toContain("Gateway readiness")
+    expect(scheduler).toMatchObject({ category: "agent-status", execution: "executed" })
+    expect(scheduler.result).toContain("Scheduler capability")
+    expect(scheduler.result).not.toContain("Learning records")
+    expect(ambiguous).toMatchObject({ category: "agent-status", execution: "blocked" })
+    expect(ambiguous.reason).toContain("at most one capability area")
+    expect(runtime).toMatchObject({ execution: "blocked" })
+    expect(reads).toBe(2)
+  })
+
   test("runs bounded device readiness and known-workspace list locally but blocks sensitive routes", async () => {
     const device = await executeLocalIntent("Termux device readiness memory storage dikhao")
     const sensitive = await executeLocalIntent("API key: sk_very-secret-value-123456789")
