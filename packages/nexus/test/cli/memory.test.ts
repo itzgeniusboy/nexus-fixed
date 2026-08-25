@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -8,8 +8,12 @@ import {
   formatMemoryList,
   getLocalMemory,
   listLocalMemories,
+  MEMORY_METADATA_EXPORT,
   memoryStatus,
   removeLocalMemory,
+  searchLocalMemoryTitles,
+  updateLocalMemory,
+  writeMemoryMetadataExport,
 } from "../../src/cli/cmd/memory"
 
 describe("local permanent memory", () => {
@@ -71,6 +75,69 @@ describe("local permanent memory", () => {
       expect(removeLocalMemory({ stateDirectory, id: 1, confirmed: true })).toBeUndefined()
       expect(() => removeLocalMemory({ stateDirectory, id: 1, confirmed: false })).toThrow("requires --confirm")
       expect(memoryStatus(stateDirectory)).toMatchObject({ initialized: false, entries: 0 })
+    } finally {
+      rmSync(stateDirectory, { recursive: true, force: true })
+    }
+  })
+
+  test("updates exactly one confirmed ID while preserving creation time and other entries", () => {
+    const stateDirectory = mkdtempSync(join(tmpdir(), "nexus-memory-"))
+    try {
+      const first = addLocalMemory({ stateDirectory, title: "first", value: "keep first", createdAt: 1 })
+      const second = addLocalMemory({ stateDirectory, title: "second", value: "keep second", createdAt: 2 })
+
+      expect(() => updateLocalMemory({ stateDirectory, id: first.id, title: "updated", value: "changed", confirmed: false })).toThrow(
+        "requires --confirm",
+      )
+      expect(() => updateLocalMemory({ stateDirectory, id: first.id, title: "credential", value: "password=not-allowed", confirmed: true })).toThrow(
+        "looks sensitive",
+      )
+      expect(getLocalMemory({ stateDirectory, id: first.id })).toEqual(first)
+      expect(updateLocalMemory({ stateDirectory, id: first.id, title: "updated", value: "changed", confirmed: true })).toEqual({
+        id: first.id,
+        title: "updated",
+        value: "changed",
+        createdAt: first.createdAt,
+      })
+      expect(getLocalMemory({ stateDirectory, id: second.id })).toEqual(second)
+      expect(updateLocalMemory({ stateDirectory, id: 999, title: "missing", value: "missing", confirmed: true })).toBeUndefined()
+    } finally {
+      rmSync(stateDirectory, { recursive: true, force: true })
+    }
+  })
+
+  test("searches bounded titles only and never matches or displays memory values", () => {
+    const stateDirectory = mkdtempSync(join(tmpdir(), "nexus-memory-"))
+    try {
+      const titleMatch = addLocalMemory({ stateDirectory, title: "Project preference", value: "value must stay private", createdAt: 1 })
+      addLocalMemory({ stateDirectory, title: "Device note", value: "project appears only in this value", createdAt: 2 })
+
+      expect(searchLocalMemoryTitles({ stateDirectory, query: "project" })).toEqual([
+        { id: titleMatch.id, title: titleMatch.title, createdAt: titleMatch.createdAt },
+      ])
+      expect(searchLocalMemoryTitles({ stateDirectory, query: "private" })).toEqual([])
+      expect(() => searchLocalMemoryTitles({ stateDirectory, query: "password=not-searchable" })).toThrow("looks sensitive")
+    } finally {
+      rmSync(stateDirectory, { recursive: true, force: true })
+    }
+  })
+
+  test("writes only a confirmed fixed-name metadata export and never overwrites or includes values", async () => {
+    const stateDirectory = mkdtempSync(join(tmpdir(), "nexus-memory-"))
+    try {
+      const entry = addLocalMemory({ stateDirectory, title: "Project preference", value: "value must never be exported", createdAt: 1 })
+      const path = join(stateDirectory, MEMORY_METADATA_EXPORT)
+
+      await expect(writeMemoryMetadataExport({ stateDirectory, confirmed: false })).rejects.toThrow("requires --confirm")
+      expect(existsSync(path)).toBe(false)
+      await expect(writeMemoryMetadataExport({ stateDirectory, confirmed: true, exportedAt: 2 })).resolves.toEqual({ path, entries: 1 })
+      const exported = readFileSync(path, "utf8")
+      expect(exported).toContain('"kind": "nexus-local-memory-metadata"')
+      expect(exported).toContain(`"id": ${entry.id}`)
+      expect(exported).toContain(entry.title)
+      expect(exported).not.toContain(entry.value)
+      expect(exported).not.toContain('"value"')
+      await expect(writeMemoryMetadataExport({ stateDirectory, confirmed: true })).rejects.toThrow("not overwritten")
     } finally {
       rmSync(stateDirectory, { recursive: true, force: true })
     }

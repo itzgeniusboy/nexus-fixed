@@ -189,21 +189,21 @@ const intentRules: readonly IntentRule[] = [
   },
   {
     pattern:
-      /^(?!.*\b(?:add|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:show|entry|id|details?|dikhao|dekhao).*?\b\d+\b)|(?:(?:show|entry|id|details?|dikhao|dekhao).*(?:local\s+)?memor(?:y|ies).*?\b\d+\b))/i,
+      /^(?!.*\b(?:add|update|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:show|entry|id|details?|dikhao|dekhao).*?\b\d+\b)|(?:(?:show|entry|id|details?|dikhao|dekhao).*(?:local\s+)?memor(?:y|ies).*?\b\d+\b))/i,
     category: "memory",
     plugin: "memory",
     command: "show",
   },
   {
     pattern:
-      /^(?!.*\b(?:add|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:status|storage|state))|(?:(?:status|storage|state).*(?:local\s+)?memor(?:y|ies)))/i,
+      /^(?!.*\b(?:add|update|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:status|storage|state))|(?:(?:status|storage|state).*(?:local\s+)?memor(?:y|ies)))/i,
     category: "memory",
     plugin: "memory",
     command: "status",
   },
   {
     pattern:
-      /^(?!.*\b(?:add|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:list|entries|all|saare|sab))|(?:(?:list|entries|all|saare|sab).*(?:local\s+)?memor(?:y|ies)))/i,
+      /^(?!.*\b(?:add|update|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:list|entries|all|saare|sab))|(?:(?:list|entries|all|saare|sab).*(?:local\s+)?memor(?:y|ies)))/i,
     category: "memory",
     plugin: "memory",
     command: "list",

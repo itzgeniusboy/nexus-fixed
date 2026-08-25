@@ -1,5 +1,6 @@
 import { Database } from "bun:sqlite"
 import { existsSync, mkdirSync } from "node:fs"
+import { mkdir, writeFile } from "node:fs/promises"
 import { EOL } from "node:os"
 import { join } from "node:path"
 import { Global } from "@nexus-ai/core/global"
@@ -8,6 +9,8 @@ import { cmd } from "./cmd"
 const MAX_TITLE_LENGTH = 80
 const MAX_VALUE_LENGTH = 1_000
 const MAX_LIST_LIMIT = 50
+const MAX_SEARCH_LIMIT = 20
+export const MEMORY_METADATA_EXPORT = "memory-metadata.json"
 
 export type LocalMemoryEntry = {
   id: number
@@ -20,6 +23,15 @@ export type LocalMemoryStatus = {
   path: string
   initialized: boolean
   entries: number
+}
+
+export type LocalMemoryTitleMatch = Pick<LocalMemoryEntry, "id" | "title" | "createdAt">
+
+export type LocalMemoryMetadataExport = {
+  version: 1
+  kind: "nexus-local-memory-metadata"
+  exportedAt: number
+  entries: LocalMemoryTitleMatch[]
 }
 
 export function memoryDatabasePath(stateDirectory = Global.Path.state): string {
@@ -151,6 +163,85 @@ export function removeLocalMemory(input: {
   }
 }
 
+export function updateLocalMemory(input: {
+  id: number
+  title: string
+  value: string
+  confirmed: boolean
+  stateDirectory?: string
+}): LocalMemoryEntry | undefined {
+  const id = normalizedMemoryID(input.id)
+  if (!input.confirmed) throw new Error("Updating one local memory entry requires --confirm")
+  const title = normalizedBoundedText(input.title, MAX_TITLE_LENGTH, "Memory title")
+  const value = normalizedBoundedText(input.value, MAX_VALUE_LENGTH, "Memory value")
+  if (containsSensitiveMemoryValue(`${title}\n${value}`)) {
+    throw new Error("Memory value looks sensitive and was not persisted. Remove credentials, OTPs, passwords, or session factors.")
+  }
+  const path = memoryDatabasePath(input.stateDirectory ?? Global.Path.state)
+  if (!existsSync(path)) return undefined
+  const database = new Database(path)
+  try {
+    const updated = database.transaction(() => {
+      const existing = database
+        .query("SELECT id, created_at AS createdAt FROM nexus_memory WHERE id = $id")
+        .get({ $id: id }) as Pick<LocalMemoryEntry, "id" | "createdAt"> | null
+      if (!existing) return undefined
+      database.query("UPDATE nexus_memory SET title = $title, value = $value WHERE id = $id").run({ $id: id, $title: title, $value: value })
+      return { ...existing, title, value }
+    })()
+    return updated ?? undefined
+  } finally {
+    database.close()
+  }
+}
+
+export function searchLocalMemoryTitles(input: {
+  query: string
+  stateDirectory?: string
+  limit?: number
+}): LocalMemoryTitleMatch[] {
+  const query = normalizedBoundedText(input.query, MAX_TITLE_LENGTH, "Memory title query")
+  if (containsSensitiveMemoryValue(query)) throw new Error("Memory title query looks sensitive and was not searched")
+  const path = memoryDatabasePath(input.stateDirectory ?? Global.Path.state)
+  if (!existsSync(path)) return []
+  const limit = Math.min(Math.max(input.limit ?? 10, 1), MAX_SEARCH_LIMIT)
+  const database = new Database(path, { readonly: true })
+  try {
+    return database
+      .query(
+        "SELECT id, title, created_at AS createdAt FROM nexus_memory WHERE instr(lower(title), lower($query)) > 0 ORDER BY created_at DESC, id DESC LIMIT $limit",
+      )
+      .all({ $query: query, $limit: limit }) as LocalMemoryTitleMatch[]
+  } finally {
+    database.close()
+  }
+}
+
+export async function writeMemoryMetadataExport(input: {
+  confirmed: boolean
+  stateDirectory?: string
+  exportedAt?: number
+}): Promise<{ path: string; entries: number }> {
+  if (!input.confirmed) throw new Error("Writing local memory metadata requires --confirm")
+  const stateDirectory = input.stateDirectory ?? Global.Path.state
+  const path = join(stateDirectory, MEMORY_METADATA_EXPORT)
+  if (existsSync(path)) throw new Error(`The fixed ${MEMORY_METADATA_EXPORT} file already exists and was not overwritten`)
+  const entries = listLocalMemories({ stateDirectory, limit: MAX_LIST_LIMIT }).map((entry) => ({
+    id: entry.id,
+    title: sanitizeMemoryValue(entry.title),
+    createdAt: entry.createdAt,
+  }))
+  const payload: LocalMemoryMetadataExport = {
+    version: 1,
+    kind: "nexus-local-memory-metadata",
+    exportedAt: input.exportedAt ?? Date.now(),
+    entries,
+  }
+  await mkdir(stateDirectory, { recursive: true })
+  await writeFile(path, JSON.stringify(payload, null, 2) + EOL, { encoding: "utf8", flag: "wx" })
+  return { path, entries: entries.length }
+}
+
 export function formatMemoryStatus(status: LocalMemoryStatus, format: "table" | "json"): string {
   if (format === "json") return JSON.stringify(status, null, 2)
   return [
@@ -170,6 +261,16 @@ export function formatMemoryList(entries: LocalMemoryEntry[], format: "table" | 
     lines.push(`${entry.id}  ${entry.title}  ${entry.value}  ${new Date(entry.createdAt).toISOString()}`)
   }
   lines.push("Boundary: local explicit entries only; no automatic prompt/session/file capture, model call, provider request, or remote sync.")
+  return lines.join(EOL)
+}
+
+export function formatMemoryTitleSearch(entries: LocalMemoryTitleMatch[], format: "table" | "json"): string {
+  const safe = entries.map((entry) => ({ ...entry, title: sanitizeMemoryValue(entry.title) }))
+  if (format === "json") return JSON.stringify(safe, null, 2)
+  if (safe.length === 0) return "No explicit local memory titles matched. Values were not searched."
+  const lines = ["ID  Title  Saved", "─".repeat(56)]
+  for (const entry of safe) lines.push(`${entry.id}  ${entry.title}  ${new Date(entry.createdAt).toISOString()}`)
+  lines.push("Boundary: title-only local search; memory values were not searched or displayed.")
   return lines.join(EOL)
 }
 
@@ -229,6 +330,48 @@ export const MemoryRemoveCommand = cmd({
   },
 })
 
+export const MemoryUpdateCommand = cmd({
+  command: "update <id>",
+  describe: "update exactly one local memory entry only after explicit confirmation",
+  builder: (yargs) =>
+    yargs
+      .positional("id", { type: "number", describe: "positive local memory entry ID" })
+      .option("title", { type: "string", demandOption: true, describe: "1-80 printable character replacement title" })
+      .option("value", { type: "string", demandOption: true, describe: "1-1000 printable character replacement value" })
+      .option("confirm", { type: "boolean", default: false, describe: "confirm this one-entry local update" }),
+  handler(args: { id: number; title: string; value: string; confirm?: boolean }) {
+    const updated = updateLocalMemory({ id: args.id, title: args.title, value: args.value, confirmed: args.confirm === true })
+    if (!updated) throw new Error(`No local memory entry exists for ID ${args.id}; no update was performed`)
+    process.stdout.write(`Updated local memory entry #${updated.id}. No other memory entries were changed, and the value was not echoed.${EOL}`)
+  },
+})
+
+export const MemorySearchCommand = cmd({
+  command: "search <query>",
+  describe: "search bounded local memory titles only; values are never searched",
+  builder: (yargs) =>
+    yargs
+      .positional("query", { type: "string", describe: "1-80 printable title search query" })
+      .option("limit", { type: "number", default: 10, describe: `maximum title matches to show (1-${MAX_SEARCH_LIMIT})` })
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
+  handler(args: { query: string; limit?: number; format?: "table" | "json" }) {
+    process.stdout.write(formatMemoryTitleSearch(searchLocalMemoryTitles({ query: args.query, limit: args.limit }), args.format ?? "table") + EOL)
+  },
+})
+
+export const MemoryExportMetadataCommand = cmd({
+  command: "export-metadata",
+  describe: "create one confirmed fixed-name local memory metadata export without values",
+  builder: (yargs) =>
+    yargs.option("confirm", { type: "boolean", default: false, describe: "confirm creating the fixed metadata-only export" }),
+  async handler(args: { confirm?: boolean }) {
+    const exported = await writeMemoryMetadataExport({ confirmed: args.confirm === true })
+    process.stdout.write(
+      `Created ${exported.path} with metadata for ${exported.entries} local memory entries. Values, vault keys, credentials, browser data, shell history, project files, and remote state were not exported.${EOL}`,
+    )
+  },
+})
+
 export const MemoryStatusCommand = cmd({
   command: "status",
   describe: "show local memory storage status without creating it",
@@ -248,6 +391,9 @@ export const MemoryCommand = cmd({
       .command(MemoryListCommand)
       .command(MemoryShowCommand)
       .command(MemoryRemoveCommand)
+      .command(MemoryUpdateCommand)
+      .command(MemorySearchCommand)
+      .command(MemoryExportMetadataCommand)
       .command(MemoryStatusCommand)
       .demandCommand(),
   async handler() {},
