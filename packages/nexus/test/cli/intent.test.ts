@@ -52,6 +52,18 @@ describe("local intent inspection", () => {
       command: "role list",
       execution: "not-run",
     })
+    expect(inspectIntent("meri total API keys aur tokens usage dikhao")).toMatchObject({
+      category: "api-status",
+      plugin: "api",
+      command: "list",
+      execution: "not-run",
+    })
+    expect(inspectIntent("API token budget aur daily limit batao")).toMatchObject({
+      category: "api-status",
+      plugin: "api",
+      command: "budget",
+      execution: "not-run",
+    })
   })
 
   test("blocks sensitive or oversized input without echoing it or proposing a route", () => {
@@ -81,6 +93,19 @@ describe("local intent inspection", () => {
 
   test("does not suggest agent creation or selection for an inspection-only role request", () => {
     expect(inspectIntent("planner ko active select kar do")).toEqual({
+      category: "unknown",
+      confidence: "none",
+      execution: "not-run",
+    })
+  })
+
+  test("does not suggest adding or checking an API key from inspection-only wording", () => {
+    expect(inspectIntent("nayi API key add kar do")).toEqual({
+      category: "unknown",
+      confidence: "none",
+      execution: "not-run",
+    })
+    expect(inspectIntent("API key active check kar do")).toEqual({
       category: "unknown",
       confidence: "none",
       execution: "not-run",
