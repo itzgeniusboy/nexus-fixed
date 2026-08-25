@@ -14,6 +14,7 @@ import PROMPT_COMPACTION from "./prompt/compaction.txt"
 import PROMPT_EXPLORE from "./prompt/explore.txt"
 import PROMPT_SUMMARY from "./prompt/summary.txt"
 import PROMPT_TITLE from "./prompt/title.txt"
+import { SPECIALIST_ROLE_CONFIGS, SPECIALIST_ROLE_DETAILS } from "./specialists"
 import { Permission } from "@/permission"
 import { mergeDeep, pipe, sortBy, values } from "remeda"
 import { Global } from "@nexus-ai/core/global"
@@ -212,6 +213,42 @@ const layer = Layer.effect(
             ),
             description: `Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. "src/components/**/*.tsx"), search code for keywords (eg. "API endpoints"), or answer questions about the codebase (eg. "how do API endpoints work?"). When calling this agent, specify the desired thoroughness level: "quick" for basic searches, "medium" for moderate exploration, or "very thorough" for comprehensive analysis across multiple locations and naming conventions.`,
             prompt: PROMPT_EXPLORE,
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          planner: {
+            name: "planner",
+            description: SPECIALIST_ROLE_DETAILS.planner.description,
+            prompt: SPECIALIST_ROLE_DETAILS.planner.prompt,
+            permission: Permission.merge(defaults, Permission.fromConfig(SPECIALIST_ROLE_CONFIGS.planner), user),
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          coder: {
+            name: "coder",
+            description: SPECIALIST_ROLE_DETAILS.coder.description,
+            prompt: SPECIALIST_ROLE_DETAILS.coder.prompt,
+            permission: Permission.merge(defaults, user),
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          reviewer: {
+            name: "reviewer",
+            description: SPECIALIST_ROLE_DETAILS.reviewer.description,
+            prompt: SPECIALIST_ROLE_DETAILS.reviewer.prompt,
+            permission: Permission.merge(defaults, Permission.fromConfig(SPECIALIST_ROLE_CONFIGS.reviewer), user),
+            options: {},
+            mode: "subagent",
+            native: true,
+          },
+          tester: {
+            name: "tester",
+            description: SPECIALIST_ROLE_DETAILS.tester.description,
+            prompt: SPECIALIST_ROLE_DETAILS.tester.prompt,
+            permission: Permission.merge(defaults, Permission.fromConfig(SPECIALIST_ROLE_CONFIGS.tester), user),
             options: {},
             mode: "subagent",
             native: true,
