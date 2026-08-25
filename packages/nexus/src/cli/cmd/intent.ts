@@ -45,7 +45,20 @@ const intentRules: readonly IntentRule[] = [
     command: "doctor:explain",
   },
   {
-    pattern: /(?:workspace|project).*(?:list|show|rename|naam|name|details?)/i,
+    pattern:
+      /(?:(?:workspace|project).*(?:selected|current|active)|(?:selected|current|active).*(?:workspace|project)).*(?:status|which|kaun|konsa|kon sa|show|dikhao)?/i,
+    category: "workspace",
+    plugin: "workspace",
+    command: "selected",
+  },
+  {
+    pattern: /(?:workspace|project).*(?:show|details?|detail|info|information)/i,
+    category: "workspace",
+    plugin: "workspace",
+    command: "show",
+  },
+  {
+    pattern: /(?:workspace|project).*(?:list|naam|name)/i,
     category: "workspace",
     plugin: "workspace",
     command: "list",

@@ -10,6 +10,18 @@ describe("local intent inspection", () => {
       confidence: "high",
       execution: "not-run",
     })
+    expect(inspectIntent("current selected workspace dikhao")).toMatchObject({
+      category: "workspace",
+      plugin: "workspace",
+      command: "selected",
+      execution: "not-run",
+    })
+    expect(inspectIntent("project ki details dikhao")).toMatchObject({
+      category: "workspace",
+      plugin: "workspace",
+      command: "show",
+      execution: "not-run",
+    })
     expect(inspectIntent("please check env variables")).toMatchObject({
       category: "diagnostics",
       plugin: "devtools",
@@ -45,5 +57,13 @@ describe("local intent inspection", () => {
     const result = inspectIntent("kuch bilkul alag karna hai")
     expect(result).toEqual({ category: "unknown", confidence: "none", execution: "not-run" })
     expect(formatIntentInspection(result, "json")).not.toContain("query")
+  })
+
+  test("does not suggest a mutation route for workspace selection requests", () => {
+    expect(inspectIntent("mera project select kar do")).toEqual({
+      category: "unknown",
+      confidence: "none",
+      execution: "not-run",
+    })
   })
 })
