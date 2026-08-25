@@ -40,6 +40,18 @@ describe("local intent inspection", () => {
       confidence: "high",
       execution: "not-run",
     })
+    expect(inspectIntent("reviewer agent role policy dikhao")).toMatchObject({
+      category: "agent-role",
+      plugin: "agent",
+      command: "role show",
+      execution: "not-run",
+    })
+    expect(inspectIntent("agent ke saare roles list dikhao")).toMatchObject({
+      category: "agent-role",
+      plugin: "agent",
+      command: "role list",
+      execution: "not-run",
+    })
   })
 
   test("blocks sensitive or oversized input without echoing it or proposing a route", () => {
@@ -61,6 +73,14 @@ describe("local intent inspection", () => {
 
   test("does not suggest a mutation route for workspace selection requests", () => {
     expect(inspectIntent("mera project select kar do")).toEqual({
+      category: "unknown",
+      confidence: "none",
+      execution: "not-run",
+    })
+  })
+
+  test("does not suggest agent creation or selection for an inspection-only role request", () => {
+    expect(inspectIntent("planner ko active select kar do")).toEqual({
       category: "unknown",
       confidence: "none",
       execution: "not-run",

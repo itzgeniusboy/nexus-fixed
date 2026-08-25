@@ -10,6 +10,7 @@ export type IntentInspection = {
     | "workspace"
     | "translation"
     | "version-control"
+    | "agent-role"
     | "permission"
     | "termux"
     | "voice"
@@ -70,6 +71,19 @@ const intentRules: readonly IntentRule[] = [
     command: "plan",
   },
   { pattern: /(?:commit|git\s*review|pr\s*banao)/i, category: "version-control", plugin: "gitpro", command: "commit" },
+  {
+    pattern: /(?:agent\s*)?roles?.*(?:list|all|available|saare|sab)|(?:list|all|available|saare|sab).*(?:agent\s*)?roles?/i,
+    category: "agent-role",
+    plugin: "agent",
+    command: "role list",
+  },
+  {
+    pattern:
+      /(?:agent\s*)?(?:role|planner|coder|reviewer|tester).*(?:show|policy|rules?|constraints?|settings?|details?|info|information|dekhao|dikhao)|(?:show|policy|rules?|constraints?|settings?|details?|info|information|dekhao|dikhao).*(?:agent\s*)?(?:role|planner|coder|reviewer|tester)/i,
+    category: "agent-role",
+    plugin: "agent",
+    command: "role show",
+  },
   {
     pattern:
       /(?:permission|allow|deny|denied|access).*(?:explain|check|inspect|status|kyu|kyon|why)|(?:bash|edit|read|webfetch|question).*(?:permission|allow|deny|denied)/i,
