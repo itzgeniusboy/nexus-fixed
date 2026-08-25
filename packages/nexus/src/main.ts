@@ -43,6 +43,7 @@ import { LuaCommand } from "./cli/cmd/lua"
 import { DoctorCommand } from "./cli/cmd/doctor"
 import { ProfileCommand } from "./cli/cmd/profile"
 import { OnboardCommand } from "./cli/cmd/onboard"
+import { InstructionsCommand } from "./cli/cmd/instructions"
 import { PermissionCommand } from "./cli/cmd/permission"
 import { WorkspaceCommand } from "./cli/cmd/workspace"
 import { TranslatorCommand } from "./cli/cmd/translator"
@@ -135,6 +136,7 @@ const cli = yargs(args)
   .command(DoctorCommand)
   .command(ProfileCommand)
   .command(OnboardCommand)
+  .command(InstructionsCommand)
   .command(PermissionCommand)
   .command(WorkspaceCommand)
   .command(TranslatorCommand)
