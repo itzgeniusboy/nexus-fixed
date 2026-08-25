@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { formatIntentInspection, inspectIntent } from "../../src/cli/cmd/intent"
+import { executeLocalIntent, formatIntentExecution, formatIntentInspection, inspectIntent } from "../../src/cli/cmd/intent"
 
 describe("local intent inspection", () => {
   test("classifies bounded Hinglish and English requests deterministically without execution", () => {
@@ -110,5 +110,57 @@ describe("local intent inspection", () => {
       confidence: "none",
       execution: "not-run",
     })
+  })
+
+  test("executes only high-confidence API local inspection through the explicit allowlist", async () => {
+    const result = await executeLocalIntent("API key readiness dikhao")
+
+    expect(result.execution).toBe("executed")
+    expect(result.result).toContain("API readiness (local observations only)")
+    expect(result.result).toContain("No provider contacted, key checked, vault changed, route selected, or task started")
+    expect(formatIntentExecution(result, "table")).toContain("completed locally (read-only)")
+  })
+
+  test("executes named specialist-role inspection but blocks an unnamed role detail", async () => {
+    const reviewer = await executeLocalIntent("reviewer agent role policy dikhao")
+    const unnamed = await executeLocalIntent("agent role details dikhao")
+
+    expect(reviewer.execution).toBe("executed")
+    expect(reviewer.result).toContain("Role: reviewer")
+    expect(unnamed.execution).toBe("blocked")
+    expect(unnamed.reason).toContain("Name one supported role")
+  })
+
+  test("runs bounded device readiness locally but blocks sensitive and non-allowlisted routes", async () => {
+    const device = await executeLocalIntent("Termux device readiness memory storage dikhao")
+    const sensitive = await executeLocalIntent("API key: sk_very-secret-value-123456789")
+    const workspace = await executeLocalIntent("workspace ke project list dikhao")
+
+    expect(device.execution).toBe("executed")
+    expect(device.result).toContain("Observed local signals only")
+    expect(sensitive).toMatchObject({ category: "sensitive-input", execution: "blocked" })
+    expect(JSON.stringify(sensitive)).not.toContain("very-secret")
+    expect(workspace).toMatchObject({ category: "workspace", execution: "blocked" })
+    expect(formatIntentExecution(workspace, "table")).toContain("not in the explicit read-only execution allowlist")
+  })
+
+  test("executes fixed-root instruction transparency without accepting a user-supplied path", async () => {
+    const explain = await executeLocalIntent("NEXUS.md instruction precedence explain karo")
+    const status = await executeLocalIntent("instructions status dikhao")
+
+    expect(explain.execution).toBe("executed")
+    expect(explain.result).toContain("This command never prints instruction contents")
+    expect(status.execution).toBe("executed")
+    expect(status.result).toContain("Scope: names and paths only; file contents are not read")
+    expect(status.result).not.toContain("NEXUS.md instruction precedence explain karo")
+  })
+
+  test("executes workspace selection bookmark inspection but keeps workspace list blocked", async () => {
+    const selected = await executeLocalIntent("current selected workspace dikhao")
+    const listed = await executeLocalIntent("workspace ke project list dikhao")
+
+    expect(selected.execution).toBe("executed")
+    expect(selected.result).toContain("This does not affect the current shell directory")
+    expect(listed.execution).toBe("blocked")
   })
 })

@@ -109,6 +109,15 @@ export function formatApiReadiness(input: ApiReadinessInput, format: "table" | "
   ].join("\n")
 }
 
+export function formatApiUsageBudget(budget: ReturnType<typeof getApiUsageBudget>): string {
+  return [
+    "Local caps (NEXUS-observed only):",
+    `  Per task: ${budget.maxRequestsPerTask ?? "off"} requests; ${budget.maxTokensPerTask ?? "off"} tokens`,
+    `  Per UTC day: ${budget.maxRequestsPerDay ?? "off"} requests; ${budget.maxTokensPerDay ?? "off"} tokens`,
+    "  This is not a provider balance, remaining quota, or cost guarantee.",
+  ].join("\n")
+}
+
 function routeEvidence(provider: string, rows: PublicVaultRows, now: number) {
   if (provider === "ollama") {
     return {
@@ -324,14 +333,7 @@ const BudgetCommand = cmd({
           ...(args.dayTokens !== undefined ? { maxTokensPerDay: args.dayTokens } : {}),
         })
       : getApiUsageBudget()
-    process.stdout.write("Local caps (NEXUS-observed only):\n")
-    process.stdout.write(
-      `  Per task: ${budget.maxRequestsPerTask ?? "off"} requests; ${budget.maxTokensPerTask ?? "off"} tokens\n`,
-    )
-    process.stdout.write(
-      `  Per UTC day: ${budget.maxRequestsPerDay ?? "off"} requests; ${budget.maxTokensPerDay ?? "off"} tokens\n`,
-    )
-    process.stdout.write("  This is not a provider balance, remaining quota, or cost guarantee.\n")
+    process.stdout.write(formatApiUsageBudget(budget) + "\n")
   },
 })
 

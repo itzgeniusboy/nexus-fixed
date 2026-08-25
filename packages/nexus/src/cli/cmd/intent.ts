@@ -1,5 +1,11 @@
 import { EOL } from "node:os"
 import { cmd } from "./cmd"
+import { apiVaultKeyPath, apiVaultRows, getApiUsageBudget, getApiVaultStatus } from "../../api/ApiVault"
+import { formatApiReadiness, formatApiUsageBudget, formatApiVaultList } from "./api"
+import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
+import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
+import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
+import { formatWorkspaceSelection, readWorkspaceSelection } from "./workspace"
 
 const MAX_INTENT_INPUT_LENGTH = 1_000
 
@@ -13,6 +19,8 @@ export type IntentInspection = {
     | "api-status"
     | "agent-role"
     | "permission"
+    | "device"
+    | "instructions"
     | "termux"
     | "voice"
     | "webtest"
@@ -73,6 +81,12 @@ const intentRules: readonly IntentRule[] = [
   },
   { pattern: /(?:commit|git\s*review|pr\s*banao)/i, category: "version-control", plugin: "gitpro", command: "commit" },
   {
+    pattern: /(?:api|keys?|key).*(?:readiness|ready)|(?:readiness|ready).*(?:api|keys?|key)/i,
+    category: "api-status",
+    plugin: "api",
+    command: "readiness",
+  },
+  {
     pattern:
       /(?:api|requests?|tokens?).*(?:budget|caps?|limits?)|(?:budget|caps?|limits?).*(?:api|requests?|tokens?)/i,
     category: "api-status",
@@ -105,6 +119,27 @@ const intentRules: readonly IntentRule[] = [
     category: "permission",
     plugin: "permission",
     command: "explain",
+  },
+  {
+    pattern:
+      /(?:instructions?|nexus\.md|agents\.md|claude\.md|context\.md).*(?:explain|precedence|order|priority|rules?)|(?:explain|precedence|order|priority).*(?:instructions?|nexus\.md|agents\.md|claude\.md|context\.md)/i,
+    category: "instructions",
+    plugin: "instructions",
+    command: "explain",
+  },
+  {
+    pattern:
+      /(?:instructions?|nexus\.md|agents\.md|claude\.md|context\.md).*(?:status|list|show|dikhao|dekhao|check)|(?:status|list|show|dikhao|dekhao|check).*(?:instructions?|nexus\.md|agents\.md|claude\.md|context\.md)/i,
+    category: "instructions",
+    plugin: "instructions",
+    command: "status",
+  },
+  {
+    pattern:
+      /(?:device|termux|android|pc|phone).*(?:readiness|ready|ram|memory|storage|battery|thermal)|(?:readiness|ram|memory|storage|battery|thermal).*(?:device|termux|android|pc|phone)/i,
+    category: "device",
+    plugin: "device",
+    command: "readiness",
   },
   {
     pattern: /(?:notification|notify|toast|battery|clipboard|apk|location)/i,
@@ -166,9 +201,104 @@ export function formatIntentInspection(result: IntentInspection, format: "table"
   return lines.join(EOL)
 }
 
+export type IntentExecution = Omit<IntentInspection, "execution"> & {
+  execution: "executed" | "blocked"
+  result?: string
+  reason?: string
+}
+
+function roleNamedIn(value: string): SpecialistRoleName | undefined {
+  return specialistRoleNames.find((role) => new RegExp(`\\b${role}\\b`, "i").test(value))
+}
+
+function blockedExecution(inspection: IntentInspection, reason: string): IntentExecution {
+  return { ...inspection, execution: "blocked", reason }
+}
+
+/**
+ * Executes only a literal allowlist of local read-only formatters. It never shells out,
+ * loads plugins, calls a model/provider, validates keys, changes vault/route state, or
+ * forwards the user message to another subsystem.
+ */
+export async function executeLocalIntent(value: string): Promise<IntentExecution> {
+  const inspection = inspectIntent(value)
+  if (inspection.confidence !== "high") {
+    return blockedExecution(inspection, "Only a bounded, high-confidence read-only local intent may be executed.")
+  }
+  if (inspection.category === "api-status") {
+    if (inspection.command === "list") {
+      const status = getApiVaultStatus()
+      return {
+        ...inspection,
+        execution: "executed",
+        result: formatApiVaultList({
+          vaultPath: apiVaultKeyPath(),
+          autoRotate: status.autoRotate,
+          budget: getApiUsageBudget(),
+          rows: apiVaultRows(),
+        }),
+      }
+    }
+    if (inspection.command === "budget") {
+      return { ...inspection, execution: "executed", result: formatApiUsageBudget(getApiUsageBudget()) }
+    }
+    if (inspection.command === "readiness") {
+      const status = getApiVaultStatus()
+      return {
+        ...inspection,
+        execution: "executed",
+        result: formatApiReadiness({ autoRotate: status.autoRotate, budget: getApiUsageBudget(), rows: apiVaultRows() }),
+      }
+    }
+  }
+  if (inspection.category === "agent-role") {
+    if (inspection.command === "role list") return { ...inspection, execution: "executed", result: formatSpecialistRoles("table") }
+    if (inspection.command === "role show") {
+      const role = roleNamedIn(value)
+      return role
+        ? { ...inspection, execution: "executed", result: formatSpecialistRole(role, "table") }
+        : blockedExecution(inspection, "Name one supported role: planner, coder, reviewer, or tester.")
+    }
+  }
+  if (inspection.category === "device" && inspection.command === "readiness") {
+    const readiness = await collectDeviceReadiness()
+    return { ...inspection, execution: "executed", result: formatDeviceReadiness(readiness, "table") }
+  }
+  if (inspection.category === "instructions") {
+    if (inspection.command === "explain") return { ...inspection, execution: "executed", result: formatInstructionExplanation() }
+    if (inspection.command === "status") {
+      const directory = process.cwd()
+      return { ...inspection, execution: "executed", result: formatInstructionStatus(directory, directory) }
+    }
+  }
+  if (inspection.category === "workspace" && inspection.command === "selected") {
+    return { ...inspection, execution: "executed", result: formatWorkspaceSelection(await readWorkspaceSelection()) }
+  }
+  return blockedExecution(
+    inspection,
+    "This suggested route is not in the explicit read-only execution allowlist and was not run.",
+  )
+}
+
+export function formatIntentExecution(result: IntentExecution, format: "table" | "json"): string {
+  if (format === "json") return JSON.stringify(result, null, 2)
+  const lines = [
+    `Category: ${result.category}`,
+    `Suggested local route: ${result.plugin && result.command ? `${result.plugin}:${result.command}` : "none"}`,
+    `Confidence: ${result.confidence}`,
+    `Execution: ${result.execution === "executed" ? "completed locally (read-only)" : "blocked"}`,
+  ]
+  if (result.execution === "executed" && result.result) lines.push("Result:", result.result)
+  else if (result.reason) lines.push(`Reason: ${result.reason}`)
+  lines.push(
+    "Execution boundary: no model call, plugin load, shell execution, remote request, key check, write, route selection, or persistent preference occurred.",
+  )
+  return lines.join(EOL)
+}
+
 export const IntentCommand = cmd({
   command: "intent <message..>",
-  describe: "inspect a bounded Hinglish/English intent locally without running it",
+  describe: "inspect a bounded Hinglish/English intent locally; `--execute-local` has a strict read-only allowlist",
   builder: (yargs) =>
     yargs
       .positional("message", {
@@ -177,9 +307,18 @@ export const IntentCommand = cmd({
         demandOption: true,
         describe: "non-sensitive request to inspect",
       })
-      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
-  handler(args: { message: string[]; format?: "table" | "json" }) {
-    const result = inspectIntent(args.message.join(" "))
-    process.stdout.write(formatIntentInspection(result, args.format ?? "table") + EOL)
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" })
+      .option("execute-local", {
+        type: "boolean",
+        default: false,
+        describe: "explicitly run a hard-coded local read-only allowlist; all other suggestions remain blocked",
+      }),
+  async handler(args: { message: string[]; format?: "table" | "json"; executeLocal?: boolean }) {
+    const message = args.message.join(" ")
+    if (args.executeLocal) {
+      process.stdout.write(formatIntentExecution(await executeLocalIntent(message), args.format ?? "table") + EOL)
+      return
+    }
+    process.stdout.write(formatIntentInspection(inspectIntent(message), args.format ?? "table") + EOL)
   },
 })
