@@ -163,4 +163,15 @@ describe("local intent inspection", () => {
     expect(selected.result).toContain("This does not affect the current shell directory")
     expect(listed.execution).toBe("blocked")
   })
+
+  test("executes a bounded current-project translation plan only for an explicit language pair", async () => {
+    const plan = await executeLocalIntent("TypeScript se Python translation plan banao")
+    const ambiguous = await executeLocalIntent("TypeScript Python Go translation plan banao")
+
+    expect(plan).toMatchObject({ category: "translation", execution: "executed" })
+    expect(plan.result).toContain("NEXUS Translation Plan (manual review required; not executed)")
+    expect(plan.result).toContain("This command does not read file contents, call a model, or write translated output")
+    expect(ambiguous.execution).toBe("blocked")
+    expect(ambiguous.reason).toContain("exactly two distinct supported languages")
+  })
 })

@@ -6,6 +6,13 @@ import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type 
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
 import { formatWorkspaceSelection, readWorkspaceSelection } from "./workspace"
+import {
+  collectTranslationFiles,
+  createTranslationPlan,
+  formatTranslationPlan,
+  translationLanguages,
+  type TranslationLanguage,
+} from "./translator"
 
 const MAX_INTENT_INPUT_LENGTH = 1_000
 
@@ -74,7 +81,8 @@ const intentRules: readonly IntentRule[] = [
     command: "list",
   },
   {
-    pattern: /(?:translate|convert|badlo|convert karo).*(?:php|python|nodejs?|typescript|javascript|tailwind|vue)/i,
+    pattern:
+      /(?:(?:translate|translation|convert|badlo).*(?:php|python|go|typescript|javascript))|(?:(?:php|python|go|typescript|javascript).*(?:translate|translation|convert|badlo))/i,
     category: "translation",
     plugin: "translator",
     command: "plan",
@@ -215,6 +223,17 @@ function blockedExecution(inspection: IntentInspection, reason: string): IntentE
   return { ...inspection, execution: "blocked", reason }
 }
 
+function requestedTranslationLanguages(value: string): { source: TranslationLanguage; target: TranslationLanguage } | undefined {
+  const names = new RegExp(`\\b(${translationLanguages.join("|")})\\b`, "gi")
+  const found: TranslationLanguage[] = []
+  for (const match of value.matchAll(names)) {
+    const language = match[1].toLowerCase() as TranslationLanguage
+    if (!found.includes(language)) found.push(language)
+  }
+  if (found.length !== 2 || found[0] === found[1]) return undefined
+  return { source: found[0], target: found[1] }
+}
+
 /**
  * Executes only a literal allowlist of local read-only formatters. It never shells out,
  * loads plugins, calls a model/provider, validates keys, changes vault/route state, or
@@ -258,6 +277,35 @@ export async function executeLocalIntent(value: string): Promise<IntentExecution
       return role
         ? { ...inspection, execution: "executed", result: formatSpecialistRole(role, "table") }
         : blockedExecution(inspection, "Name one supported role: planner, coder, reviewer, or tester.")
+    }
+  }
+  if (inspection.category === "translation" && inspection.command === "plan") {
+    const languages = requestedTranslationLanguages(value)
+    if (!languages) {
+      return blockedExecution(
+        inspection,
+        "State exactly two distinct supported languages: typescript, javascript, python, php, or go.",
+      )
+    }
+    try {
+      const root = process.cwd()
+      const collected = await collectTranslationFiles({ root, scope: ".", language: languages.source, maxFiles: 50 })
+      return {
+        ...inspection,
+        execution: "executed",
+        result: formatTranslationPlan(
+          createTranslationPlan({
+            source: languages.source,
+            target: languages.target,
+            scope: ".",
+            files: collected.files,
+            truncated: collected.truncated,
+          }),
+          "table",
+        ),
+      }
+    } catch {
+      return blockedExecution(inspection, "The current project could not be inventoried within the bounded local plan.")
     }
   }
   if (inspection.category === "device" && inspection.command === "readiness") {
