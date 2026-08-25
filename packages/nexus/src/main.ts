@@ -44,6 +44,7 @@ import { DoctorCommand } from "./cli/cmd/doctor"
 import { ProfileCommand } from "./cli/cmd/profile"
 import { OnboardCommand } from "./cli/cmd/onboard"
 import { PermissionCommand } from "./cli/cmd/permission"
+import { WorkspaceCommand } from "./cli/cmd/workspace"
 
 const rawArgs = hideBin(process.argv)
 const args = rawArgs
@@ -133,6 +134,7 @@ const cli = yargs(args)
   .command(ProfileCommand)
   .command(OnboardCommand)
   .command(PermissionCommand)
+  .command(WorkspaceCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||
