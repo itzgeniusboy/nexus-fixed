@@ -77,6 +77,7 @@ export function routeModel(input: string, options: { includeLocal?: boolean } = 
     const model = requested.slice(slash + 1)
     if (provider === "ollama" || providerConfigured(provider)) return [{ alias: requested, provider, model, reason: "explicit provider/model" }]
   }
+  if (options.includeLocal === false) return []
   return [{ alias: requested, provider: "ollama", model: requested || "llama3", reason: "local/default route" }]
 }
 
