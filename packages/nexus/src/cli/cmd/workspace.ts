@@ -18,6 +18,13 @@ export type WorkspaceDetail = WorkspaceSummary & {
   worktree: string
 }
 
+export function validatedWorkspaceDisplayName(value: string | undefined): string | undefined {
+  if (!value) return undefined
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(value)) return undefined
+  const normalized = value.replace(/\s+/g, " ").trim()
+  return normalized && normalized.length <= 80 ? normalized : undefined
+}
+
 function safeWorkspaceName(value: string | undefined): string {
   const normalized = (value ?? "")
     .replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")
@@ -158,10 +165,54 @@ export const WorkspaceShowCommand = effectCmd({
   }),
 })
 
+export const WorkspaceRenameCommand = effectCmd({
+  command: "rename <projectID>",
+  describe: "set a confirmed local display name for one known project; never changes project files",
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .positional("projectID", {
+        describe: "project ID from `nexus workspace list`",
+        type: "string",
+        demandOption: true,
+      })
+      .option("name", {
+        describe: "new local display name (1–80 printable characters)",
+        type: "string",
+        demandOption: true,
+      })
+      .option("confirm", {
+        describe: "explicitly confirm changing only this local registry display name",
+        type: "boolean",
+        default: false,
+      }),
+  handler: Effect.fn("Cli.workspace.rename")(function* (args: {
+    projectID?: string
+    name?: string
+    confirm?: boolean
+  }) {
+    if (!args.projectID) return yield* fail("Project ID is required")
+    const name = validatedWorkspaceDisplayName(args.name)
+    if (!name) return yield* fail("--name must contain 1–80 printable characters")
+    if (!args.confirm) return yield* fail("Workspace display-name changes require --confirm")
+    const updated = yield* Project.Service.use((service) =>
+      service.update({ projectID: ProjectV2.ID.make(args.projectID!), name }),
+    )
+    process.stdout.write(
+      `Updated local display name for ${updated.id} to ${JSON.stringify(updated.name)}. No project files, commands, icon, worktree, sandbox, configuration, or selection state changed.${EOL}`,
+    )
+  }),
+})
+
 export const WorkspaceCommand = cmd({
   command: "workspace",
   describe: "discover and navigate NEXUS-known local projects without changing them",
   builder: (yargs) =>
-    yargs.command(WorkspaceListCommand).command(WorkspaceCdCommand).command(WorkspaceShowCommand).demandCommand(),
+    yargs
+      .command(WorkspaceListCommand)
+      .command(WorkspaceCdCommand)
+      .command(WorkspaceShowCommand)
+      .command(WorkspaceRenameCommand)
+      .demandCommand(),
   async handler() {},
 })

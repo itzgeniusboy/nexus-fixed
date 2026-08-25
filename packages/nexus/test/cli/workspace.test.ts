@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test"
 import {
   formatWorkspaceDetail,
   formatWorkspaceList,
+  validatedWorkspaceDisplayName,
   workspaceNavigationCommand,
   workspaceSummary,
 } from "../../src/cli/cmd/workspace"
@@ -44,6 +45,13 @@ describe("workspace CLI safety", () => {
     expect(table).toContain("Worktree: /private/workspaces/demo project's app")
     expect(table).toContain("Read-only detail: no project metadata")
     expect(json).toContain('"worktree": "/private/workspaces/demo project\'s app"')
+  })
+
+  test("accepts only bounded printable local display names for explicit confirmed updates", () => {
+    expect(validatedWorkspaceDisplayName("  Demo   Workspace  ")).toBe("Demo Workspace")
+    expect(validatedWorkspaceDisplayName("\u001bhidden")).toBeUndefined()
+    expect(validatedWorkspaceDisplayName(" ")).toBeUndefined()
+    expect(validatedWorkspaceDisplayName("x".repeat(81))).toBeUndefined()
   })
 
   test("prints a shell-escaped copy-only navigation command for an explicitly selected project", () => {

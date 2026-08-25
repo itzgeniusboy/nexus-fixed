@@ -603,6 +603,31 @@ describe("Project.update", () => {
     }),
   )
 
+  it.live("should preserve project display metadata when updating only the local name", () =>
+    Effect.gen(function* () {
+      const project = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      const result = yield* project.fromDirectory(tmp)
+      yield* project.update({
+        projectID: result.project.id,
+        icon: { url: "https://example.com/icon.svg", override: "data:image/png;base64,abc", color: "#112233" },
+        commands: { start: "bun dev" },
+      })
+
+      const renamed = yield* project.update({ projectID: result.project.id, name: "Local Display Name" })
+
+      expect(renamed.name).toBe("Local Display Name")
+      expect(renamed.icon).toEqual({
+        url: "https://example.com/icon.svg",
+        override: "data:image/png;base64,abc",
+        color: "#112233",
+      })
+      expect(renamed.commands).toEqual({ start: "bun dev" })
+      expect(renamed.worktree).toBe(result.project.worktree)
+      expect(renamed.sandboxes).toEqual(result.project.sandboxes)
+    }),
+  )
+
   it.live("should update multiple fields at once", () =>
     Effect.gen(function* () {
       const project = yield* Project.Service
