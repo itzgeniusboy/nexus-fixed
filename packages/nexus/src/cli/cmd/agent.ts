@@ -15,6 +15,7 @@ import { openLocalBrowser, parseBrowserHandoffTarget } from "../../agent-platfor
 import { clearLocalGatewayState, defaultLocalGatewayStatePath, gatewayCredentialName, isLocalGatewayProcessRunning, pollTelegramOnce, readLocalGatewayState, startLocalGatewayServer, type GatewayCredentialKind } from "../../agent-platform/gateway-local"
 import { planGatewayRun } from "../../agent-platform/gateway"
 import { SecretStore } from "@nexus-ai/assistant/core/secret-store"
+import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
 
 type AgentMode = "all" | "primary" | "subagent"
 
@@ -254,6 +255,29 @@ const AgentListCommand = effectCmd({
       process.stdout.write(`  ${JSON.stringify(agent.permission, null, 2)}` + EOL)
     }
   }),
+})
+
+const AgentRoleCommand = cmd({
+  command: "role <operation> [role]",
+  describe: "inspect first-party specialist role constraints without selecting or changing them",
+  builder: (yargs: Argv) =>
+    yargs
+      .positional("operation", { choices: ["list", "show"] as const, describe: "inspect all roles or one role" })
+      .positional("role", { choices: specialistRoleNames, describe: "role name required for show" })
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
+  handler(args: { operation: "list" | "show"; role?: SpecialistRoleName; format?: "table" | "json" }) {
+    const format = args.format ?? "table"
+    if (args.operation === "list") {
+      process.stdout.write(formatSpecialistRoles(format) + EOL)
+      return
+    }
+    if (!args.role) {
+      UI.error("Role name required. Use: nexus agent role show <planner|coder|reviewer|tester>")
+      process.exitCode = 1
+      return
+    }
+    process.stdout.write(formatSpecialistRole(args.role, format) + EOL)
+  },
 })
 
 function platformError(error: unknown) {
@@ -644,6 +668,6 @@ const AgentRunCommand = cmd({
 export const AgentCommand = cmd({
   command: "agent",
   describe: "manage agents",
-  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).demandCommand(),
+  builder: (yargs) => yargs.command(AgentCreateCommand).command(AgentListCommand).command(AgentRoleCommand).command(AgentMemoryCommand).command(AgentLearningCommand).command(AgentScheduleCommand).command(AgentGatewayCommand).command(AgentBrowserCommand).command(AgentRunCommand).demandCommand(),
   async handler() {},
 })
