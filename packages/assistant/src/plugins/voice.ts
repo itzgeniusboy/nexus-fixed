@@ -3,6 +3,18 @@ import type { NexusPlugin, PluginContext } from "../core/types"
 import { Orchestrator } from "../core/orchestrator"
 import { redactSensitive, containsSensitive } from "../core/redact"
 
+export function guardVoiceCommand(
+  command: string,
+): { allowed: true; command: string } | { allowed: false; message: string } {
+  if (containsSensitive(command)) {
+    return {
+      allowed: false,
+      message: "Sensitive authentication content detected. Voice command was not displayed, stored, or routed.",
+    }
+  }
+  return { allowed: true, command }
+}
+
 async function listen(ctx: PluginContext): Promise<number | void> {
   if (!process.env.TERMUX_VERSION && !process.env.PREFIX?.includes("com.termux")) {
     ctx.err("Voice mode needs Termux:API (termux-speech-to-text). Falling back to text input.")
@@ -20,11 +32,12 @@ async function listen(ctx: PluginContext): Promise<number | void> {
       return 0
     }
 
-    const safeLine = redactSensitive(line)
-    if (containsSensitive(line)) {
-      ctx.err(`${Icon.lock} Sensitive content detected and redacted before routing.`)
+    const guarded = guardVoiceCommand(line)
+    if (!guarded.allowed) {
+      ctx.err(`${Icon.lock} ${guarded.message}`)
+      continue
     }
-    const code = await orchestrator.process(safeLine, ctx.cwd, ctx.llm)
+    const code = await orchestrator.process(guarded.command, ctx.cwd, ctx.llm)
     if (code !== 0) continue
   }
 }
@@ -62,10 +75,12 @@ async function oneShot(ctx: PluginContext): Promise<number | void> {
     return 1
   }
 
-  const safeCommand = redactSensitive(command)
-  if (containsSensitive(command)) {
-    ctx.err(`${Icon.lock} Sensitive content redacted — transcript safe to display/route.`)
+  const guarded = guardVoiceCommand(command)
+  if (!guarded.allowed) {
+    ctx.err(`${Icon.lock} ${guarded.message}`)
+    return 1
   }
+  const safeCommand = guarded.command
   ctx.out(`${Icon.brain} Command: ${safeCommand}`)
 
   const confirm = await ctx.confirm({
@@ -87,7 +102,12 @@ const plugin: NexusPlugin = {
   tags: ["voice", "termux", "commands"],
   commands: [
     { name: "listen", describe: "continuous command loop", usage: "nexus voice listen", run: listen },
-    { name: "say", describe: 'one-shot voice/text command, e.g. nexus voice say "todo app banao"', usage: 'nexus voice say "<command>"', run: oneShot },
+    {
+      name: "say",
+      describe: 'one-shot voice/text command, e.g. nexus voice say "todo app banao"',
+      usage: 'nexus voice say "<command>"',
+      run: oneShot,
+    },
   ],
 }
 

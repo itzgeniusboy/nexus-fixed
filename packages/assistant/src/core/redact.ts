@@ -17,7 +17,10 @@ const REDACTIONS: Array<[RegExp, string]> = [
   [/\bxox[baprs]-[A-Za-z0-9_-]{8,}/g, "[REDACTED-TOKEN]"],
   [/Bearer\s+[A-Za-z0-9._-]{12,}/gi, "Bearer [REDACTED-TOKEN]"],
   // Explicit secrets: password/passphrase/token/secret/api key followed by a value
-  [/((?:pass(?:word|wd|phrase)?|api[ _-]?key|token|secret|recovery[ _-]?code)\s*(?:is|:|=)?\s*")[^"]+"/gi, '$1[REDACTED]'],
+  [
+    /((?:pass(?:word|wd|phrase)?|api[ _-]?key|token|secret|recovery[ _-]?code)\s*(?:is|:|=)?\s*")[^"]+"/gi,
+    "$1[REDACTED]",
+  ],
   [/((?:pass(?:word|wd|phrase)?|api[ _-]?key|token|secret|recovery[ _-]?code)\s*(?:is|:|=)?\s*)\S+/gi, "$1[REDACTED]"],
 ]
 
