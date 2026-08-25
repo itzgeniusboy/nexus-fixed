@@ -10,6 +10,7 @@ export type IntentInspection = {
     | "workspace"
     | "translation"
     | "version-control"
+    | "permission"
     | "termux"
     | "voice"
     | "webtest"
@@ -56,6 +57,13 @@ const intentRules: readonly IntentRule[] = [
     command: "plan",
   },
   { pattern: /(?:commit|git\s*review|pr\s*banao)/i, category: "version-control", plugin: "gitpro", command: "commit" },
+  {
+    pattern:
+      /(?:permission|allow|deny|denied|access).*(?:explain|check|inspect|status|kyu|kyon|why)|(?:bash|edit|read|webfetch|question).*(?:permission|allow|deny|denied)/i,
+    category: "permission",
+    plugin: "permission",
+    command: "explain",
+  },
   {
     pattern: /(?:notification|notify|toast|battery|clipboard|apk|location)/i,
     category: "termux",

@@ -21,6 +21,13 @@ describe("local intent inspection", () => {
       plugin: "voice",
       execution: "not-run",
     })
+    expect(inspectIntent("bash permission denied kyu hai")).toEqual({
+      category: "permission",
+      plugin: "permission",
+      command: "explain",
+      confidence: "high",
+      execution: "not-run",
+    })
   })
 
   test("blocks sensitive or oversized input without echoing it or proposing a route", () => {
