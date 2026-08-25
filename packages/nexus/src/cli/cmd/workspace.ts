@@ -1,6 +1,8 @@
-import { basename } from "node:path"
+import fs from "node:fs/promises"
+import { basename, join } from "node:path"
 import { EOL } from "os"
 import { Effect } from "effect"
+import { Global } from "@nexus-ai/core/global"
 import { ProjectV2 } from "@nexus-ai/core/project"
 import { effectCmd, fail } from "../effect-cmd"
 import { cmd } from "./cmd"
@@ -16,6 +18,12 @@ export type WorkspaceSummary = {
 
 export type WorkspaceDetail = WorkspaceSummary & {
   worktree: string
+}
+
+export type WorkspaceSelection = {
+  version: 1
+  projectID: string
+  selectedAt: number
 }
 
 export function validatedWorkspaceDisplayName(value: string | undefined): string | undefined {
@@ -100,6 +108,75 @@ export function workspaceNavigationCommand(directory: string, platform = process
   return platform === "win32"
     ? `Set-Location -LiteralPath ${powerShellLiteral(directory)}`
     : `cd -- ${posixShellLiteral(directory)}`
+}
+
+export function workspaceSelectionPath(configDirectory = Global.Path.config): string {
+  return join(configDirectory, "workspace-selection.json")
+}
+
+export async function readWorkspaceSelection(
+  configDirectory = Global.Path.config,
+): Promise<WorkspaceSelection | undefined> {
+  try {
+    const parsed = JSON.parse(
+      await fs.readFile(workspaceSelectionPath(configDirectory), "utf8"),
+    ) as Partial<WorkspaceSelection>
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.projectID !== "string" ||
+      !parsed.projectID ||
+      !Number.isFinite(parsed.selectedAt)
+    )
+      return undefined
+    return { version: 1, projectID: parsed.projectID, selectedAt: parsed.selectedAt }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+    return undefined
+  }
+}
+
+export async function writeWorkspaceSelection(input: {
+  configDirectory?: string
+  projectID: string
+  selectedAt?: number
+}): Promise<WorkspaceSelection> {
+  const configDirectory = input.configDirectory ?? Global.Path.config
+  const selection: WorkspaceSelection = {
+    version: 1,
+    projectID: input.projectID,
+    selectedAt: input.selectedAt ?? Date.now(),
+  }
+  await fs.mkdir(configDirectory, { recursive: true })
+  const destination = workspaceSelectionPath(configDirectory)
+  const temporary = `${destination}.${process.pid}.${Date.now()}.tmp`
+  try {
+    await fs.writeFile(temporary, JSON.stringify(selection, null, 2) + "\n", { encoding: "utf8", flag: "wx" })
+    await fs.rename(temporary, destination)
+  } finally {
+    await fs.rm(temporary, { force: true }).catch(() => undefined)
+  }
+  return selection
+}
+
+export async function clearWorkspaceSelection(configDirectory = Global.Path.config): Promise<boolean> {
+  try {
+    await fs.unlink(workspaceSelectionPath(configDirectory))
+    return true
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false
+    throw error
+  }
+}
+
+export function formatWorkspaceSelection(selection: WorkspaceSelection | undefined, project?: Project.Info): string {
+  if (!selection) return "No local workspace selection bookmark. This does not affect the current shell directory."
+  const name = project ? safeWorkspaceName(project.name) : "(known project no longer available)"
+  return [
+    `Selected workspace bookmark: ${selection.projectID}`,
+    `Name: ${name}`,
+    `Saved: ${new Date(selection.selectedAt).toISOString()}`,
+    "Bookmark only: it does not change the current shell directory, project configuration, source files, or active session.",
+  ].join(EOL)
 }
 
 export const WorkspaceListCommand = effectCmd({
@@ -204,6 +281,66 @@ export const WorkspaceRenameCommand = effectCmd({
   }),
 })
 
+export const WorkspaceSelectedCommand = effectCmd({
+  command: "selected",
+  describe: "show the local workspace selection bookmark without changing anything",
+  instance: false,
+  handler: Effect.fn("Cli.workspace.selected")(function* () {
+    const selection = yield* Effect.tryPromise({ try: () => readWorkspaceSelection(), catch: (error) => error })
+    const project = selection
+      ? yield* Project.Service.use((service) => service.get(ProjectV2.ID.make(selection.projectID)))
+      : undefined
+    process.stdout.write(formatWorkspaceSelection(selection, project) + EOL)
+  }),
+})
+
+export const WorkspaceSelectCommand = effectCmd({
+  command: "select <projectID>",
+  describe: "save a confirmed local workspace bookmark; never changes the shell or project files",
+  instance: false,
+  builder: (yargs) =>
+    yargs
+      .positional("projectID", {
+        describe: "project ID from `nexus workspace list`",
+        type: "string",
+        demandOption: true,
+      })
+      .option("confirm", {
+        describe: "explicitly confirm saving this local workspace bookmark",
+        type: "boolean",
+        default: false,
+      }),
+  handler: Effect.fn("Cli.workspace.select")(function* (args: { projectID?: string; confirm?: boolean }) {
+    if (!args.projectID) return yield* fail("Project ID is required")
+    if (!args.confirm) return yield* fail("Saving a workspace selection bookmark requires --confirm")
+    const project = yield* Project.Service.use((service) => service.get(ProjectV2.ID.make(args.projectID)))
+    if (!project) return yield* fail(`Known project not found: ${args.projectID}`)
+    yield* Effect.tryPromise({ try: () => writeWorkspaceSelection({ projectID: project.id }), catch: (error) => error })
+    process.stdout.write(
+      `Saved local workspace bookmark for ${project.id}. It does not change the shell, source files, project config, or active session.${EOL}`,
+    )
+  }),
+})
+
+export const WorkspaceClearSelectionCommand = effectCmd({
+  command: "clear-selection",
+  describe: "remove the local workspace selection bookmark after explicit confirmation",
+  instance: false,
+  builder: (yargs) =>
+    yargs.option("confirm", {
+      describe: "explicitly confirm removing the local workspace bookmark",
+      type: "boolean",
+      default: false,
+    }),
+  handler: Effect.fn("Cli.workspace.clearSelection")(function* (args: { confirm?: boolean }) {
+    if (!args.confirm) return yield* fail("Removing a workspace selection bookmark requires --confirm")
+    const removed = yield* Effect.tryPromise({ try: () => clearWorkspaceSelection(), catch: (error) => error })
+    process.stdout.write(
+      `${removed ? "Removed" : "No"} local workspace selection bookmark. Shell, project config, source files, and active session were not changed.${EOL}`,
+    )
+  }),
+})
+
 export const WorkspaceCommand = cmd({
   command: "workspace",
   describe: "discover and navigate NEXUS-known local projects without changing them",
@@ -213,6 +350,9 @@ export const WorkspaceCommand = cmd({
       .command(WorkspaceCdCommand)
       .command(WorkspaceShowCommand)
       .command(WorkspaceRenameCommand)
+      .command(WorkspaceSelectedCommand)
+      .command(WorkspaceSelectCommand)
+      .command(WorkspaceClearSelectionCommand)
       .demandCommand(),
   async handler() {},
 })

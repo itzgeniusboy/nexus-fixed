@@ -1,9 +1,16 @@
 import { describe, expect, test } from "bun:test"
+import fs from "node:fs/promises"
+import os from "node:os"
+import path from "node:path"
 import {
+  clearWorkspaceSelection,
   formatWorkspaceDetail,
   formatWorkspaceList,
+  formatWorkspaceSelection,
+  readWorkspaceSelection,
   validatedWorkspaceDisplayName,
   workspaceNavigationCommand,
+  writeWorkspaceSelection,
   workspaceSummary,
 } from "../../src/cli/cmd/workspace"
 
@@ -61,5 +68,20 @@ describe("workspace CLI safety", () => {
     expect(workspaceNavigationCommand(directory, "win32")).toBe(
       "Set-Location -LiteralPath '/private/workspaces/demo project''s app'",
     )
+  })
+
+  test("persists and clears an explicit local selection bookmark without storing project paths", async () => {
+    const configDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "nexus-workspace-selection-"))
+    const selection = await writeWorkspaceSelection({ configDirectory, projectID: "proj_safe", selectedAt: 123 })
+    const stored = await readWorkspaceSelection(configDirectory)
+    const file = await fs.readFile(path.join(configDirectory, "workspace-selection.json"), "utf8")
+
+    expect(stored).toEqual(selection)
+    expect(file).not.toContain("/private/workspaces")
+    expect(formatWorkspaceSelection(stored, project)).toContain("Selected workspace bookmark: proj_safe")
+    expect(formatWorkspaceSelection(stored, project)).toContain("does not change the current shell directory")
+    expect(await clearWorkspaceSelection(configDirectory)).toBe(true)
+    expect(await readWorkspaceSelection(configDirectory)).toBeUndefined()
+    await fs.rm(configDirectory, { recursive: true, force: true })
   })
 })
