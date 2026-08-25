@@ -57,8 +57,11 @@ import type {
 import type { RunTheme } from "./theme"
 import { modelInfo } from "./variant.shared"
 import { deriveFooterActivity } from "./footer.activity"
+import { footerMotionEnabled } from "./footer.motion"
 
 registerNexusSpinner()
+
+const footerMotion = footerMotionEnabled()
 
 const EMPTY_BORDER = {
   topLeft: "",
@@ -905,7 +908,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                   paddingRight={1}
                   backgroundColor="transparent"
                 >
-                  <Show when={activity()?.pulse && !exiting()}>
+                  <Show when={activity()?.pulse && !exiting() && footerMotion}>
                     <box flexShrink={0}>
                       <spinner color={spin().color} frames={spin().frames} interval={40} />
                     </box>
