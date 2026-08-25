@@ -39,6 +39,7 @@ import {
   recordCompletedUsage,
   type CompletedUsage,
 } from "./llm/budget"
+import { classifyTaskRequirements, supportsTaskRequirements, taskTextFromMessages } from "./llm/capability"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -409,6 +410,7 @@ const live: Layer.Layer<
 
             const candidates = [...exactCandidates, ...filteredAlternatives] as const
             const taskUsage = emptyTaskUsage()
+            const taskRequirements = classifyTaskRequirements(taskTextFromMessages(input.messages))
             const onUsage = (usage: CompletedUsage & { provider: string }) => {
               const observed = recordCompletedUsage(taskUsage, usage)
               if (usage.provider !== "ollama") {
@@ -495,6 +497,23 @@ const live: Layer.Layer<
                   const fallback = nextFallback(modelExit.cause)
                   if (fallback) return yield* fallback
                   return yield* Effect.failCause(modelExit.cause)
+                }
+                // Manual/current choice remains candidate zero. Only fallback candidates are
+                // skipped when their known local capability metadata cannot meet the task.
+                if (
+                  candidate !== candidates[0] &&
+                  !supportsTaskRequirements(modelExit.value, taskRequirements) &&
+                  rest.length > 0
+                ) {
+                  yield* Effect.logInfo("skipping incompatible fallback candidate", {
+                    providerID: candidate.providerID,
+                    modelID: candidate.modelID,
+                    tools: taskRequirements.tools,
+                    vision: taskRequirements.vision,
+                    longContext: taskRequirements.longContext,
+                    reasoning: taskRequirements.reasoning,
+                  })
+                  return yield* attempt(rest, 0)
                 }
                 const current = yield* toStream(modelExit.value)
 
