@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { Permission } from "../../src/permission"
+import { formatPermissionInspection, inspectablePermissionCategories } from "../../src/cli/cmd/permission"
 
 describe("project permission rules", () => {
   test("applies project config as an explicit baseline while retaining default ask", () => {
@@ -30,5 +31,22 @@ describe("project permission rules", () => {
     })
     expect(decision).toEqual({ permission: "bash", action: "deny", source: "project" })
     expect(JSON.stringify(decision)).not.toContain("secret-value")
+  })
+
+  test("formats only fixed safe categories and decision metadata for CLI inspection", () => {
+    const secretPath = "/private/project/.env?token=secret-value"
+    const decision = Permission.explainDecision({
+      permission: "bash",
+      pattern: secretPath,
+      project: Permission.fromConfig({ bash: "deny" }),
+    })
+    const output = formatPermissionInspection(decision)
+
+    expect(inspectablePermissionCategories).toEqual(["bash", "edit", "read", "webfetch", "question"])
+    expect(output).toContain("Permission: bash")
+    expect(output).toContain("Action: deny")
+    expect(output).toContain("Source: project")
+    expect(output).not.toContain(secretPath)
+    expect(output).not.toContain("secret-value")
   })
 })
