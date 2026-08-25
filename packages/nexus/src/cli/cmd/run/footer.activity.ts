@@ -24,15 +24,19 @@ export function deriveFooterActivity(input: {
   if (status.includes("permission") || status.includes("approval") || status.includes("question")) {
     return { glyph: "‖", label: "Waiting for approval", tone: "warning", pulse: false }
   }
+  if (/(wait|hold|queued)/.test(status)) return { glyph: "…", label: "Waiting", tone: "muted", pulse: false }
+  if (/(error|failed|failure)/.test(status)) return { glyph: "!", label: "Needs attention", tone: "error", pulse: false }
   if (input.completed) return { glyph: "✓", label: "Completed", tone: "muted", pulse: false }
   if (!input.busy) return
   if (status.includes("test")) return { glyph: "✓", label: "Testing", tone: "active", pulse: true }
+  if (/(reason|think|plan)/.test(status)) return { glyph: "◌", label: "Reasoning", tone: "active", pulse: true }
   if (/(read|grep|glob|search|scan|list|find)/.test(status)) {
     return { glyph: "⌕", label: "Reading", tone: "active", pulse: true }
   }
   if (/(write|edit|patch|apply|create)/.test(status)) {
     return { glyph: "✎", label: "Writing", tone: "active", pulse: true }
   }
+  if (/(delet|remove|unlink)/.test(status)) return { glyph: "!", label: "Deleting", tone: "warning", pulse: false }
   if (/(upload|push)/.test(status)) return { glyph: "↑", label: "Uploading", tone: "active", pulse: true }
   if (/(download|pull|fetch)/.test(status)) return { glyph: "↓", label: "Downloading", tone: "active", pulse: true }
   return { glyph: "◌", label: "Working", tone: "active", pulse: true }

@@ -20,6 +20,25 @@ describe("Termux footer activity", () => {
     ).toMatchObject({ label: "Waiting for approval", pulse: false })
   })
 
+  test("maps only explicit runtime wording to compact reasoning, hold, deletion, and attention states", () => {
+    expect(deriveFooterActivity({ busy: true, exiting: false, armed: false, status: "reasoning about the task" })).toMatchObject({
+      label: "Reasoning",
+      tone: "active",
+    })
+    expect(deriveFooterActivity({ busy: true, exiting: false, armed: false, status: "on hold" })).toMatchObject({
+      label: "Waiting",
+      pulse: false,
+    })
+    expect(deriveFooterActivity({ busy: true, exiting: false, armed: false, status: "deleting generated file" })).toMatchObject({
+      label: "Deleting",
+      tone: "warning",
+    })
+    expect(deriveFooterActivity({ busy: false, exiting: false, armed: false, status: "request failed" })).toMatchObject({
+      label: "Needs attention",
+      tone: "error",
+    })
+  })
+
   test("shows completion only when the footer observes a real completed run", () => {
     expect(
       deriveFooterActivity({ busy: false, exiting: false, armed: false, status: "", completed: true }),

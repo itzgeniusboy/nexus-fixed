@@ -475,8 +475,7 @@ export function RunFooterView(props: RunFooterViewProps) {
     return {
       model: model().model,
       variant: props.currentVariant(),
-      provider: undefined,
-      // Prefer without provider, but keep it on the shared width policy if we add it back.
+      provider: model().provider,
     }
   })
   const statusColor = createMemo(() => {
