@@ -3,6 +3,7 @@ import { cmd } from "./cmd"
 import * as prompts from "@clack/prompts"
 import {
   API_PROVIDERS,
+  apiVaultPublicRows,
   resolveProviderLabel,
   addApiKey as vaultAddApiKey,
   apiVaultKeyPath,
@@ -18,7 +19,24 @@ import {
   updateApiKeyStatus,
   type ApiKeyStatus,
 } from "../../api/ApiVault"
-import { routeModel, routeSummary } from "../../api/ModelRouter"
+import { routeModel } from "../../api/ModelRouter"
+
+type ApiVaultRows = ReturnType<typeof apiVaultRows>
+type PublicVaultRows = ReturnType<typeof apiVaultPublicRows>
+
+export type ApiReadinessInput = {
+  autoRotate: boolean
+  budget: ReturnType<typeof getApiUsageBudget>
+  rows: ApiVaultRows
+  now?: number
+}
+
+export type ApiRoutePreviewInput = {
+  model: string
+  routes: ReturnType<typeof routeModel>
+  rows: PublicVaultRows
+  now?: number
+}
 
 function printError(error: unknown): void {
   process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`)
@@ -32,6 +50,115 @@ type ApiVaultListInput = {
   budget: ReturnType<typeof getApiUsageBudget>
   rows: ReturnType<typeof apiVaultRows>
   now?: number
+}
+
+function isCooling(cooldownUntil: string | undefined, now: number): boolean {
+  return Boolean(cooldownUntil && Date.parse(cooldownUntil) > now)
+}
+
+function providerUsageTotals(rows: ApiVaultRows) {
+  const byProvider = new Map<string, { requests: number; tokens: number }>()
+  for (const row of rows) {
+    if (byProvider.has(row.provider)) continue
+    byProvider.set(row.provider, {
+      requests: row.usage.todayRequests,
+      tokens: row.usage.todayInputTokens + row.usage.todayOutputTokens,
+    })
+  }
+  return [...byProvider.values()].reduce(
+    (total, usage) => ({ requests: total.requests + usage.requests, tokens: total.tokens + usage.tokens }),
+    { requests: 0, tokens: 0 },
+  )
+}
+
+/** Formats local prior-check evidence only; it deliberately does not perform a provider or key check. */
+export function formatApiReadiness(input: ApiReadinessInput, format: "table" | "json" = "table"): string {
+  const now = input.now ?? Date.now()
+  const states = input.rows.reduce(
+    (total, row) => {
+      total[row.status]++
+      if (isCooling(row.cooldownUntil, now)) total.cooling++
+      return total
+    },
+    { active: 0, rate_limited: 0, invalid: 0, suspended: 0, unknown: 0, cooling: 0 },
+  )
+  const usage = providerUsageTotals(input.rows)
+  const summary = {
+    observedOnly: true as const,
+    providers: new Set(input.rows.map((row) => row.provider)).size,
+    keys: input.rows.length,
+    states,
+    autoRotate: input.autoRotate,
+    localCaps: input.budget,
+    observedToday: usage,
+    limitations: [
+      "Uses stored NEXUS local health and usage evidence only.",
+      "Does not contact providers, test keys, change vault state, select a model, or start a task.",
+      "Cannot report provider balance, remaining quota, account allocation, cost, or real-time availability.",
+    ],
+  }
+  if (format === "json") return JSON.stringify(summary, null, 2)
+  return [
+    "API readiness (local observations only)",
+    `Stored: ${summary.keys} masked key entries across ${summary.providers} provider(s); auto-rotation ${summary.autoRotate ? "on" : "off"}`,
+    `Prior local status: ${states.active} active, ${states.unknown} unknown, ${states.rate_limited} rate-limited, ${states.invalid} invalid, ${states.suspended} suspended; ${states.cooling} cooling`,
+    `NEXUS observed today: ${usage.requests} request(s) / ${usage.tokens} token(s) across stored providers`,
+    `Local caps: task ${input.budget.maxRequestsPerTask ?? "off"} req / ${input.budget.maxTokensPerTask ?? "off"} tok; day ${input.budget.maxRequestsPerDay ?? "off"} req / ${input.budget.maxTokensPerDay ?? "off"} tok`,
+    "No provider contacted, key checked, vault changed, route selected, or task started.",
+    "This is not a provider balance, remaining quota, account allocation, cost, or real-time availability reading.",
+  ].join("\n")
+}
+
+function routeEvidence(provider: string, rows: PublicVaultRows, now: number) {
+  if (provider === "ollama") {
+    return {
+      kind: "local" as const,
+      keyEntries: 0,
+      active: 0,
+      cooling: 0,
+      summary: "Local candidate; backend/runtime availability is not checked.",
+    }
+  }
+  const keys = rows.find((row) => row.provider === provider)?.keys ?? []
+  const active = keys.filter((key) => key.status === "active").length
+  const cooling = keys.filter((key) => isCooling(key.cooldownUntil, now)).length
+  const summary = keys.length
+    ? `Stored local evidence: ${active} active, ${cooling} cooling, ${keys.length} masked key entr${keys.length === 1 ? "y" : "ies"}.`
+    : "No stored local key evidence."
+  return { kind: "provider" as const, keyEntries: keys.length, active, cooling, summary }
+}
+
+/** Preview only: it preserves route ordering and does not select, validate, or dispatch any route. */
+export function formatApiRoutePreview(input: ApiRoutePreviewInput, format: "table" | "json" = "table"): string {
+  const now = input.now ?? Date.now()
+  const candidates = input.routes.map((route, index) => ({
+    position: index + 1,
+    provider: route.provider,
+    model: route.model,
+    reason: route.reason,
+    localEvidence: routeEvidence(route.provider, input.rows, now),
+  }))
+  const preview = {
+    observedOnly: true as const,
+    model: input.model,
+    candidates,
+    limitations: [
+      "Preview only: preserves current candidate order but does not select a route or start a task.",
+      "Does not contact providers, validate keys, mutate health/cooldown state, or expose raw keys.",
+      "Local evidence is not provider balance, quota, cost, account access, or real-time availability.",
+    ],
+  }
+  if (format === "json") return JSON.stringify(preview, null, 2)
+  return [
+    `Model preview: ${input.model}`,
+    "#\tRoute\tReason\tLocal evidence",
+    ...candidates.map(
+      (candidate) =>
+        `${candidate.position}\t${candidate.provider}/${candidate.model}\t${candidate.reason}\t${candidate.localEvidence.summary}`,
+    ),
+    "Preview only: no provider contacted, key validated, vault changed, route selected, or task started.",
+    "Local evidence is not a provider balance, remaining quota, cost, account access, or real-time availability reading.",
+  ].join("\n")
 }
 
 /** Formats masked local vault evidence; it intentionally cannot report upstream account state. */
@@ -265,13 +392,26 @@ const RotateCommand = cmd({
 
 const RouteCommand = cmd({
   command: "route <model>",
-  describe: "show configured providers for a model alias",
-  builder: (yargs: Argv) => yargs,
-  async handler(args: { model: string }) {
+  describe: "preview configured model candidates using stored local evidence only",
+  builder: (yargs: Argv) => yargs.option("format", { choices: ["table", "json"] as const, default: "table" }),
+  async handler(args: { model: string; format?: "table" | "json" }) {
     const routes = routeModel(args.model)
-    process.stdout.write(`Model: ${args.model}\n`)
-    process.stdout.write(`Route: ${routeSummary(args.model)}\n`)
-    for (const route of routes) process.stdout.write(`${route.provider}/${route.model}\t${route.reason}\n`)
+    process.stdout.write(
+      formatApiRoutePreview({ model: args.model, routes, rows: apiVaultPublicRows() }, args.format ?? "table") + "\n",
+    )
+  },
+})
+
+const ReadinessCommand = cmd({
+  command: "readiness",
+  describe: "summarize local vault health, cooldown, usage, and cap evidence without checking providers",
+  builder: (yargs: Argv) => yargs.option("format", { choices: ["table", "json"] as const, default: "table" }),
+  async handler(args: { format?: "table" | "json" }) {
+    const vault = getApiVaultStatus()
+    process.stdout.write(
+      formatApiReadiness({ autoRotate: vault.autoRotate, budget: getApiUsageBudget(), rows: apiVaultRows() }, args.format ?? "table") +
+        "\n",
+    )
   },
 })
 
@@ -296,6 +436,7 @@ export const ApiCommand = cmd({
       .command(CheckCommand)
       .command(RemoveCommand)
       .command(RotateCommand)
-      .command(RouteCommand),
+      .command(RouteCommand)
+      .command(ReadinessCommand),
   async handler() {},
 })
