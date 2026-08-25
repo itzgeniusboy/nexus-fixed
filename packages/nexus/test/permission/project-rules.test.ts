@@ -19,4 +19,16 @@ describe("project permission rules", () => {
     expect(Permission.evaluate("bash", "curl https://example.test", rules).action).toBe("deny")
     expect(Permission.evaluate("edit", "src/app.ts", rules).action).toBe("allow")
   })
+
+  test("explains only action and policy layer, never the matched command or pattern", () => {
+    const decision = Permission.explainDecision({
+      permission: "bash",
+      pattern: "curl https://example.test?token=secret-value",
+      project: Permission.fromConfig({ bash: "deny" }),
+      agent: [{ permission: "bash", pattern: "git *", action: "allow" }],
+      session: [],
+    })
+    expect(decision).toEqual({ permission: "bash", action: "deny", source: "project" })
+    expect(JSON.stringify(decision)).not.toContain("secret-value")
+  })
 })

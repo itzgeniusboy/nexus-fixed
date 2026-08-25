@@ -37,6 +37,40 @@ export function evaluate(permission: string, pattern: string, ...rulesets: Permi
   )
 }
 
+export type ExplainedDecision = {
+  permission: string
+  action: PermissionV1.Rule["action"]
+  source: "project" | "agent" | "session" | "default"
+}
+
+/**
+ * Returns only the resolved action and policy layer. Callers deliberately do
+ * not receive a tool argument, path, prompt, or matching rule pattern.
+ */
+export function explainDecision(input: {
+  permission: string
+  pattern: string
+  project?: PermissionV1.Ruleset
+  agent?: PermissionV1.Ruleset
+  session?: PermissionV1.Ruleset
+}): ExplainedDecision {
+  const layers: Array<[Exclude<ExplainedDecision["source"], "default">, PermissionV1.Ruleset | undefined]> = [
+    ["project", input.project],
+    ["agent", input.agent],
+    ["session", input.session],
+  ]
+  for (let index = layers.length - 1; index >= 0; index--) {
+    const [source, ruleset] = layers[index]!
+    if (!ruleset) continue
+    const rule = ruleset.findLast(
+      (candidate) =>
+        Wildcard.match(input.permission, candidate.permission) && Wildcard.match(input.pattern, candidate.pattern),
+    )
+    if (rule) return { permission: input.permission, action: rule.action, source }
+  }
+  return { permission: input.permission, action: "ask", source: "default" }
+}
+
 export class Service extends Context.Service<Service, Interface>()("@nexus/Permission") {}
 
 const layer = Layer.effect(
