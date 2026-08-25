@@ -183,6 +183,7 @@ export type FooterPromptRoute =
   | { type: "command" }
   | { type: "skill" }
   | { type: "model" }
+  | { type: "api" }
   | { type: "variant" }
 
 export type FooterSubagentTab = {

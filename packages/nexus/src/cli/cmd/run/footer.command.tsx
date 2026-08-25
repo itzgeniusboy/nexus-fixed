@@ -6,6 +6,7 @@ import { createEffect, createMemo, createSignal, type Accessor } from "solid-js"
 import { RunFooterMenu, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
 import type { FooterQueuedPrompt, FooterSubagentTab, RunCommand, RunInput, RunProvider } from "./types"
+import { PROVIDER_CONTRACTS, REGISTRY_PROVIDER_IDS } from "../../../api/providers"
 
 type PanelEntry = RunFooterMenuItem & {
   category: string
@@ -14,6 +15,7 @@ type PanelEntry = RunFooterMenuItem & {
 
 type CommandEntry =
   | (PanelEntry & { action: "model" })
+  | (PanelEntry & { action: "api" })
   | (PanelEntry & { action: "editor" })
   | (PanelEntry & { action: "skill" })
   | (PanelEntry & { action: "queued" })
@@ -28,6 +30,12 @@ type ModelEntry = PanelEntry & {
   modelID: string
   providerName: string
   current: boolean
+}
+
+export type ApiOnboardingEntry = PanelEntry & {
+  providerID: string | "custom"
+  providerLabel: string
+  setup: "vault" | "custom-config"
 }
 
 type VariantEntry = PanelEntry & {
@@ -46,6 +54,33 @@ type SubagentEntry = PanelEntry & {
 
 type QueuedEntry = PanelEntry & {
   prompt: FooterQueuedPrompt
+}
+
+export function apiOnboardingEntries(): ApiOnboardingEntry[] {
+  const providers = REGISTRY_PROVIDER_IDS.map((id) => {
+    const provider = PROVIDER_CONTRACTS[id]
+    return {
+      providerID: id,
+      providerLabel: provider.label,
+      setup: "vault" as const,
+      category: "Supported provider",
+      display: provider.label,
+      footer: provider.metadata?.length ? "account details required" : "masked vault setup",
+      keywords: `${id} ${provider.label} ${(provider.aliases ?? []).join(" ")}`,
+    }
+  })
+  return [
+    ...providers,
+    {
+      providerID: "custom",
+      providerLabel: "Custom OpenAI-compatible provider",
+      setup: "custom-config",
+      category: "Custom provider",
+      display: "Custom OpenAI-compatible provider",
+      footer: "configuration guidance",
+      keywords: "custom openai compatible provider base url api configuration",
+    },
+  ]
 }
 
 type MenuState = ReturnType<typeof createFooterMenuState>
@@ -340,6 +375,7 @@ export function RunCommandMenuBody(props: {
   variantCycle: string
   onClose: () => void
   onModel: () => void
+  onAddApi?: () => void
   onEditor: () => void
   onSkill: () => void
   onSubagent: () => void
@@ -408,6 +444,13 @@ export function RunCommandMenuBody(props: {
         category: "Agent",
         display: "Switch model",
       },
+      {
+        action: "api",
+        category: "Agent",
+        display: "Add API key",
+        footer: "safe setup",
+        keywords: "add api key provider connect onboarding custom",
+      },
       ...(props.queued().length > 0
         ? [
             {
@@ -471,6 +514,11 @@ export function RunCommandMenuBody(props: {
   const pick = (item: CommandEntry) => {
     if (item.action === "model") {
       props.onModel()
+      return
+    }
+
+    if (item.action === "api") {
+      props.onAddApi?.()
       return
     }
 
@@ -943,6 +991,75 @@ export function RunVariantSelectBody(props: {
         grouped={false}
         background
       />
+    </PanelShell>
+  )
+}
+
+export function RunApiOnboardingBody(props: {
+  theme: Accessor<RunFooterTheme>
+  onClose: () => void
+  onSelect: (entry: ApiOnboardingEntry) => void
+}) {
+  let field: InputRenderable | undefined
+  const [query, setQuery] = createSignal("")
+  const entries = createMemo(() => apiOnboardingEntries())
+  const items = createMemo(() => match(query(), entries()))
+  const menu = createFooterMenuState({ count: () => items().length, limit: PANEL_LIST_ROWS })
+  const select = () => {
+    const item = items()[menu.selected()]
+    if (item) props.onSelect(item)
+  }
+
+  createEffect(() => {
+    query()
+    menu.reset()
+  })
+
+  useKeyboard((event) => {
+    if (event.defaultPrevented) return
+    handleKey({ event, menu, field: () => field, setQuery, select, close: props.onClose })
+  })
+
+  return (
+    <PanelShell
+      title="Add API key"
+      query={query()}
+      count={items().length}
+      total={entries().length}
+      placeholder="Search supported providers"
+      theme={props.theme}
+      inputRef={(input) => {
+        field = input
+      }}
+      onQuery={setQuery}
+      dark
+      chrome="minimal"
+    >
+      <box width="100%" flexDirection="column" flexShrink={0} backgroundColor={props.theme().shade}>
+        <box paddingLeft={PANEL_PAD} paddingRight={PANEL_PAD} height={2} flexShrink={0} flexDirection="column">
+          <text fg={props.theme().muted} wrapMode="none">
+            Select a provider for secret-safe setup guidance. No API key is requested, displayed, or stored here.
+          </text>
+          <text fg={props.theme().muted} wrapMode="none">
+            This TUI only routes setup; the separate API wizard masks key entry.
+          </text>
+        </box>
+        <RunFooterMenu
+          theme={props.theme}
+          items={items}
+          selected={menu.selected}
+          offset={menu.offset}
+          rows={() => PANEL_LIST_ROWS - 2}
+          limit={PANEL_LIST_ROWS - 2}
+          empty="No provider found"
+          border={false}
+          paddingLeft={PANEL_PAD}
+          paddingRight={PANEL_PAD}
+          grouped={!query().trim()}
+          background
+          headerColor={props.theme().muted}
+        />
+      </box>
     </PanelShell>
   )
 }

@@ -10,7 +10,7 @@ import * as Prompt from "../effect/prompt"
 import { Config } from "@/config/config"
 import { isTextGenerationCandidate, modelForProvider } from "@/provider/rotation"
 import { getDeviceConfig } from "@nexus-ai/core/device"
-import { formatLocalModelRecommendations } from "./local-models"
+import { formatLocalModelCatalog, formatLocalModelDetail, formatLocalModelRecommendations } from "./local-models"
 
 function failureSummary(error: unknown): string {
   const message = String(error)
@@ -241,8 +241,37 @@ export const ModelsTestCommand = effectCmd({
 export const ModelsLocalCommand = cmd({
   command: "local",
   describe: "show conservative local-model recommendations; this never downloads or runs a model",
-  handler() {
-    process.stdout.write(formatLocalModelRecommendations(getDeviceConfig()).join(EOL) + EOL)
+  builder: (yargs) =>
+    yargs
+      .option("catalog", { type: "boolean", default: false, describe: "show the full local model catalog" })
+      .option("model", { type: "string", describe: "show one catalog model by exact ID" })
+      .option("format", { choices: ["table", "json"] as const, default: "table", describe: "output format" }),
+  handler(args: { catalog?: boolean; model?: string; format?: "table" | "json" }) {
+    const config = getDeviceConfig()
+    const format = args.format ?? "table"
+    if (args.model) {
+      process.stdout.write(formatLocalModelDetail(config, args.model, format) + EOL)
+      return
+    }
+    if (args.catalog) {
+      process.stdout.write(formatLocalModelCatalog(config, format) + EOL)
+      return
+    }
+    if (format === "json") {
+      process.stdout.write(
+        JSON.stringify(
+          {
+            recommendations: formatLocalModelRecommendations(config),
+            downloadsStarted: false,
+            runtimeStarted: false,
+          },
+          null,
+          2,
+        ) + EOL,
+      )
+      return
+    }
+    process.stdout.write(formatLocalModelRecommendations(config).join(EOL) + EOL)
   },
 })
 

@@ -20,6 +20,13 @@ export type LocalModelHardwareProfile = {
   gpu: "not detected"
 }
 
+export type LocalModelRecommendation = {
+  model: LocalModelCatalogEntry
+  recommended: boolean
+  conservativeRamAllowanceGB: number
+  rationale: string
+}
+
 export const LOCAL_MODEL_CATALOG: readonly LocalModelCatalogEntry[] = [
   {
     id: "qwen2.5-coder:3b-instruct-q4",
@@ -85,12 +92,95 @@ export function localModelHardwareProfile(config: DeviceResourceConfig): LocalMo
 }
 
 export function recommendedLocalModels(config: DeviceResourceConfig) {
-  return LOCAL_MODEL_CATALOG.filter((model) => model.minimumRamGB <= config.totalRamGB * 0.7)
+  return localModelRecommendations(config).filter((item) => item.recommended).map((item) => item.model)
+}
+
+export function localModelRecommendations(config: DeviceResourceConfig): LocalModelRecommendation[] {
+  const conservativeRamAllowanceGB = Number((config.totalRamGB * 0.7).toFixed(1))
+  return LOCAL_MODEL_CATALOG.map((model) => {
+    const recommended = model.minimumRamGB <= conservativeRamAllowanceGB
+    return {
+      model,
+      recommended,
+      conservativeRamAllowanceGB,
+      rationale: recommended
+        ? `fits the conservative ${conservativeRamAllowanceGB.toFixed(1)}GB RAM allowance`
+        : `needs >=${model.minimumRamGB}GB RAM; conservative allowance is ${conservativeRamAllowanceGB.toFixed(1)}GB`,
+    }
+  })
+}
+
+export function formatLocalModelCatalog(config: DeviceResourceConfig, format: "table" | "json" = "table"): string {
+  const profile = localModelHardwareProfile(config)
+  const models = localModelRecommendations(config).map((item) => ({
+    ...item.model,
+    recommended: item.recommended,
+    rationale: item.rationale,
+  }))
+  if (format === "json")
+    return JSON.stringify(
+      {
+        hardware: profile,
+        conservativeRamAllowanceGB: Number((config.totalRamGB * 0.7).toFixed(1)),
+        backend: "GPU/VRAM is not detected by NEXUS; no GPU acceleration is assumed.",
+        downloadsStarted: false,
+        models,
+      },
+      null,
+      2,
+    )
+
+  const lines = [
+    `Local catalog for ${profile.platform} ${profile.architecture}; conservative RAM allowance: ${(config.totalRamGB * 0.7).toFixed(1)}GB`,
+    "GPU/VRAM: not detected by NEXUS (no GPU acceleration is assumed)",
+    "Model                         Quant  Download  Storage  Min RAM  Context  Class     Fit",
+    "─".repeat(94),
+  ]
+  for (const item of localModelRecommendations(config)) {
+    const model = item.model
+    lines.push(
+      `${model.label.padEnd(29)} ${model.quantization.padEnd(6)} ~${`${model.downloadGB}GB`.padEnd(8)} ~${`${model.storageGB}GB`.padEnd(7)} ${`${model.minimumRamGB}GB`.padEnd(8)} ${`${model.contextTokens / 1000}k`.padEnd(8)} ${model.likelySpeed.padEnd(9)} ${item.recommended ? "recommended" : "not recommended"}`,
+    )
+  }
+  lines.push("Catalog values are approximate; no download or local-model runtime was started.")
+  return lines.join("\n")
+}
+
+export function formatLocalModelDetail(
+  config: DeviceResourceConfig,
+  modelID: string,
+  format: "table" | "json" = "table",
+): string {
+  const recommendation = localModelRecommendations(config).find((item) => item.model.id === modelID)
+  if (!recommendation) {
+    const known = LOCAL_MODEL_CATALOG.map((model) => model.id).join(", ")
+    return `Unknown local catalog model: ${modelID}. Known IDs: ${known}. No download or local-model runtime was started.`
+  }
+  const profile = localModelHardwareProfile(config)
+  const detail = {
+    hardware: profile,
+    model: recommendation.model,
+    recommended: recommendation.recommended,
+    rationale: recommendation.rationale,
+    backend: "GPU/VRAM is not detected by NEXUS; CPU/GPU runtime compatibility is not probed or guaranteed.",
+    downloadsStarted: false,
+    runtimeStarted: false,
+  }
+  if (format === "json") return JSON.stringify(detail, null, 2)
+  return [
+    `Model: ${recommendation.model.label} (${recommendation.model.id})`,
+    `Quantization: ${recommendation.model.quantization}`,
+    `Estimated download/storage: ~${recommendation.model.downloadGB}GB / ~${recommendation.model.storageGB}GB`,
+    `Minimum RAM: >=${recommendation.model.minimumRamGB}GB; context: ~${recommendation.model.contextTokens.toLocaleString()}; likely ${recommendation.model.likelySpeed}`,
+    `Recommendation: ${recommendation.recommended ? "yes" : "no"} — ${recommendation.rationale}`,
+    "GPU/VRAM: not detected by NEXUS; CPU/GPU runtime compatibility is not probed or guaranteed.",
+    "Informational only: no download or local-model runtime was started.",
+  ].join("\n")
 }
 
 export function formatLocalModelRecommendations(config: DeviceResourceConfig) {
   const profile = localModelHardwareProfile(config)
-  const recommendations = recommendedLocalModels(config)
+  const recommendations = localModelRecommendations(config).filter((item) => item.recommended)
   const lines = [
     `Local device: ${profile.platform} ${profile.architecture}; ${profile.ramGB.toFixed(1)}GB RAM; ${profile.cpuCores} CPU cores; ${profile.tier} tier`,
     "GPU/VRAM: not detected by NEXUS (no GPU capability is assumed)",
@@ -106,9 +196,10 @@ export function formatLocalModelRecommendations(config: DeviceResourceConfig) {
     return lines
   }
   lines.push("Recommended catalog (informational only; no download was started):")
-  for (const model of recommendations) {
+  for (const recommendation of recommendations) {
+    const model = recommendation.model
     lines.push(
-      `- ${model.label} (${model.id}) — ${model.quantization}; ~${model.downloadGB}GB download / ~${model.storageGB}GB storage; >=${model.minimumRamGB}GB RAM; ~${model.contextTokens.toLocaleString()} context; likely ${model.likelySpeed}`,
+      `- ${model.label} (${model.id}) — ${model.quantization}; ~${model.downloadGB}GB download / ~${model.storageGB}GB storage; >=${model.minimumRamGB}GB RAM; ~${model.contextTokens.toLocaleString()} context; likely ${model.likelySpeed}; ${recommendation.rationale}`,
     )
   }
   return lines

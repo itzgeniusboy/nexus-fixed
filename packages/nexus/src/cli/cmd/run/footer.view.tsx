@@ -14,6 +14,7 @@ import { registerNexusSpinner } from "@nexus-ai/tui/component/register-spinner"
 import { createColors, createFrames } from "@nexus-ai/tui/ui/spinner"
 import {
   RUN_SUBAGENT_PANEL_ROWS,
+  RunApiOnboardingBody,
   RunCommandMenuBody,
   RunModelSelectBody,
   RunQueuedPromptSelectBody,
@@ -142,6 +143,7 @@ export function RunFooterView(props: RunFooterViewProps) {
   const commanding = createMemo(() => active().type === "prompt" && route().type === "command")
   const skilling = createMemo(() => active().type === "prompt" && route().type === "skill")
   const modeling = createMemo(() => active().type === "prompt" && route().type === "model")
+  const apiOnboarding = createMemo(() => active().type === "prompt" && route().type === "api")
   const varianting = createMemo(() => active().type === "prompt" && route().type === "variant")
   const panel = createMemo(
     () =>
@@ -152,6 +154,7 @@ export function RunFooterView(props: RunFooterViewProps) {
       commanding() ||
       skilling() ||
       modeling() ||
+      apiOnboarding() ||
       varianting(),
   )
   const selected = createMemo(() => {
@@ -314,6 +317,11 @@ export function RunFooterView(props: RunFooterViewProps) {
 
   const openModel = () => {
     setRoute({ type: "model" })
+    props.onSubagentSelect?.(undefined)
+  }
+
+  const openApiOnboarding = () => {
+    setRoute({ type: "api" })
     props.onSubagentSelect?.(undefined)
   }
 
@@ -748,6 +756,7 @@ export function RunFooterView(props: RunFooterViewProps) {
                             variantCycle={variantCycle()}
                             onClose={closePanel}
                             onModel={openModel}
+                            onAddApi={openApiOnboarding}
                             onEditor={() => {
                               closePanel()
                               void composer.openEditor()
@@ -797,6 +806,28 @@ export function RunFooterView(props: RunFooterViewProps) {
                             onClose={closePanel}
                             onSelect={(model) => {
                               props.onModelSelect(model)
+                              closePanel()
+                            }}
+                          />
+                        </Match>
+                        <Match when={apiOnboarding()}>
+                          <RunApiOnboardingBody
+                            theme={theme}
+                            onClose={closePanel}
+                            onSelect={(entry) => {
+                              if (entry.setup === "custom-config") {
+                                props.onStatus(
+                                  "Custom provider setup is config-only; no generic vault key form is shown in this TUI.",
+                                )
+                              } else if (entry.providerID === "cloudflare-workers-ai") {
+                                props.onStatus(
+                                  "Cloudflare setup: exit the TUI, then use `nexus api add cloudflare-workers-ai <key> --account-id <account-id>`; the API wizard masks key entry.",
+                                )
+                              } else {
+                                props.onStatus(
+                                  `API setup for ${entry.providerLabel}: exit the TUI, then use \`nexus api add ${entry.providerID} <key>\`; the API wizard masks key entry.`,
+                                )
+                              }
                               closePanel()
                             }}
                           />
