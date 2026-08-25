@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { executeLocalIntent, formatIntentExecution, formatIntentInspection, inspectIntent } from "../../src/cli/cmd/intent"
+import { addLocalMemory, memoryStatus } from "../../src/cli/cmd/memory"
 import { readWorkspaceSelection, writeWorkspaceSelection } from "../../src/cli/cmd/workspace"
 
 describe("local intent inspection", () => {
@@ -66,6 +67,18 @@ describe("local intent inspection", () => {
       category: "api-status",
       plugin: "api",
       command: "budget",
+      execution: "not-run",
+    })
+    expect(inspectIntent("local memory entries list dikhao")).toMatchObject({
+      category: "memory",
+      plugin: "memory",
+      command: "list",
+      execution: "not-run",
+    })
+    expect(inspectIntent("memory show 7 dikhao")).toMatchObject({
+      category: "memory",
+      plugin: "memory",
+      command: "show",
       execution: "not-run",
     })
   })
@@ -137,6 +150,42 @@ describe("local intent inspection", () => {
       confidence: "none",
       execution: "not-run",
     })
+  })
+
+  test("executes only bounded local-memory inspection and preserves the no-storage/no-mutation boundary", async () => {
+    const stateDirectory = mkdtempSync(join(tmpdir(), "nexus-intent-memory-"))
+    const absentStateDirectory = mkdtempSync(join(tmpdir(), "nexus-intent-memory-absent-"))
+    try {
+      const entry = addLocalMemory({ stateDirectory, title: "preference", value: "Keep local work bounded", createdAt: 1 })
+      const status = await executeLocalIntent("local memory status dikhao", { memoryStateDirectory: stateDirectory })
+      const listed = await executeLocalIntent("memory entries list dikhao", { memoryStateDirectory: stateDirectory })
+      const shown = await executeLocalIntent(`memory show ${entry.id} dikhao`, { memoryStateDirectory: stateDirectory })
+      const missing = await executeLocalIntent("memory show 99 dikhao", { memoryStateDirectory: stateDirectory })
+      const zero = await executeLocalIntent("memory show 0 dikhao", { memoryStateDirectory: stateDirectory })
+      const absent = await executeLocalIntent("local memory entries list dikhao", { memoryStateDirectory: absentStateDirectory })
+      const sensitive = await executeLocalIntent("memory show 1 password=not-for-memory")
+
+      expect(status).toMatchObject({ category: "memory", command: "status", execution: "executed" })
+      expect(status.result).toContain("Local memory database: initialized")
+      expect(listed).toMatchObject({ category: "memory", command: "list", execution: "executed" })
+      expect(listed.result).toContain("Keep local work bounded")
+      expect(shown).toMatchObject({ category: "memory", command: "show", execution: "executed" })
+      expect(shown.result).toContain("preference")
+      expect(missing).toMatchObject({ execution: "blocked" })
+      expect(missing.reason).toContain("no storage was created or changed")
+      expect(zero).toMatchObject({ execution: "blocked" })
+      expect(zero.reason).toContain("positive local memory ID")
+      expect(absent).toMatchObject({ execution: "executed" })
+      expect(memoryStatus(absentStateDirectory)).toMatchObject({ initialized: false, entries: 0 })
+      expect(sensitive).toMatchObject({ category: "sensitive-input", execution: "blocked" })
+      expect(JSON.stringify(sensitive)).not.toContain("not-for-memory")
+      for (const request of ["memory add a note", "memory remove 1", "memory clear all", "memory export data"]) {
+        expect(inspectIntent(request)).toEqual({ category: "unknown", confidence: "none", execution: "not-run" })
+      }
+    } finally {
+      rmSync(stateDirectory, { recursive: true, force: true })
+      rmSync(absentStateDirectory, { recursive: true, force: true })
+    }
   })
 
   test("executes only high-confidence API local inspection through the explicit allowlist", async () => {

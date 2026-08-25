@@ -5,6 +5,7 @@ import { formatApiReadiness, formatApiRoutePreview, formatApiUsageBudget, format
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
+import { formatMemoryList, formatMemoryStatus, getLocalMemory, listLocalMemories, memoryStatus } from "./memory"
 import { clearWorkspaceSelection, formatWorkspaceSelection, readWorkspaceSelection } from "./workspace"
 import {
   collectTranslationFiles,
@@ -34,6 +35,7 @@ export type IntentInspection = {
     | "permission"
     | "device"
     | "instructions"
+    | "memory"
     | "local-model"
     | "model-route"
     | "termux"
@@ -186,6 +188,27 @@ const intentRules: readonly IntentRule[] = [
     command: "readiness",
   },
   {
+    pattern:
+      /^(?!.*\b(?:add|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:show|entry|id|details?|dikhao|dekhao).*?\b\d+\b)|(?:(?:show|entry|id|details?|dikhao|dekhao).*(?:local\s+)?memor(?:y|ies).*?\b\d+\b))/i,
+    category: "memory",
+    plugin: "memory",
+    command: "show",
+  },
+  {
+    pattern:
+      /^(?!.*\b(?:add|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:status|storage|state))|(?:(?:status|storage|state).*(?:local\s+)?memor(?:y|ies)))/i,
+    category: "memory",
+    plugin: "memory",
+    command: "status",
+  },
+  {
+    pattern:
+      /^(?!.*\b(?:add|remove|delete|clear|export|import|save|write)\b)(?:(?:(?:local\s+)?memor(?:y|ies).*(?:list|entries|all|saare|sab))|(?:(?:list|entries|all|saare|sab).*(?:local\s+)?memor(?:y|ies)))/i,
+    category: "memory",
+    plugin: "memory",
+    command: "list",
+  },
+  {
     pattern: /(?:notification|notify|toast|battery|clipboard|apk|location)/i,
     category: "termux",
     plugin: "termux",
@@ -253,6 +276,7 @@ export type IntentExecution = Omit<IntentInspection, "execution"> & {
 
 export type IntentExecutionOptions = {
   confirmLocal?: boolean
+  memoryStateDirectory?: string
   workspaceSelectionDirectory?: string
   translationRoot?: string
 }
@@ -281,6 +305,18 @@ function requestedKnownModelAlias(value: string): "deepseek" | "llama3_1" | "gem
   if (/\bllama\s*3(?:\.1)?\b/i.test(value)) return "llama3_1"
   if (/\bgemini\b/i.test(value)) return "gemini"
   if (/\bgpt\s*-?4\b/i.test(value)) return "gpt4"
+  return undefined
+}
+
+function requestedMemoryID(value: string): number | undefined {
+  const patterns = [
+    /\b(?:local\s+)?memor(?:y|ies)\s+(?:show|entry|id|details?|dikhao|dekhao)\s*(?:#|id\s*)?(\d+)\b/i,
+    /\b(?:show|entry|id|details?|dikhao|dekhao)\s+(?:local\s+)?memor(?:y|ies)\s*(?:#|id\s*)?(\d+)\b/i,
+  ]
+  for (const pattern of patterns) {
+    const match = value.match(pattern)
+    if (match) return Number(match[1])
+  }
   return undefined
 }
 
@@ -319,6 +355,27 @@ export async function executeLocalIntent(value: string, options: IntentExecution
         execution: "executed",
         result: formatApiReadiness({ autoRotate: status.autoRotate, budget: getApiUsageBudget(), rows: apiVaultRows() }),
       }
+    }
+  }
+  if (inspection.category === "memory") {
+    if (inspection.command === "status") {
+      return { ...inspection, execution: "executed", result: formatMemoryStatus(memoryStatus(options.memoryStateDirectory), "table") }
+    }
+    if (inspection.command === "list") {
+      return {
+        ...inspection,
+        execution: "executed",
+        result: formatMemoryList(listLocalMemories({ stateDirectory: options.memoryStateDirectory }), "table"),
+      }
+    }
+    if (inspection.command === "show") {
+      const id = requestedMemoryID(value)
+      if (!Number.isSafeInteger(id) || !id || id < 1)
+        return blockedExecution(inspection, "State exactly one positive local memory ID to show; no entry was read.")
+      const entry = getLocalMemory({ id, stateDirectory: options.memoryStateDirectory })
+      return entry
+        ? { ...inspection, execution: "executed", result: formatMemoryList([entry], "table") }
+        : blockedExecution(inspection, `No local memory entry exists for ID ${id}; no storage was created or changed.`)
     }
   }
   if (inspection.category === "agent-role") {
