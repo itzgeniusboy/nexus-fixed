@@ -22,6 +22,7 @@ import { ProviderV2 } from "@nexus-ai/core/provider"
 import { ModelV2 } from "@nexus-ai/core/model"
 import { buildPrompt } from "@nexus-ai/core/session/compaction"
 import { SessionCompactionEvent } from "@nexus-ai/schema/session-compaction-event"
+import { boundedRedactedContext, contextSafetyNotice } from "./context-safety"
 
 export const Event = SessionCompactionEvent
 
@@ -377,7 +378,8 @@ const layer = Layer.effect(
       )
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-      const conversation = msgs.map(serialize).filter(Boolean).join("\n\n")
+      const safeContext = boundedRedactedContext(msgs.map(serialize).filter(Boolean))
+      const conversation = [...safeContext.entries, contextSafetyNotice(safeContext)].filter(Boolean).join("\n\n")
       const nextPrompt =
         compacting.prompt ??
         [

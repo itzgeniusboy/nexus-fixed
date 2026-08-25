@@ -24,6 +24,7 @@ export function redactInstructionText(content: string): string {
       "$1$2 [redacted]",
     )
     .replace(/\b(Bearer)\s+[A-Za-z0-9._-]{8,}/gi, "$1 [redacted]")
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|gsk_[A-Za-z0-9_-]{12,}|sk-or-v1-[A-Za-z0-9_-]{12,})\b/g, "[redacted]")
 }
 
 function extract(messages: SessionV1.WithParts[]) {
