@@ -46,6 +46,7 @@ import { OnboardCommand } from "./cli/cmd/onboard"
 import { PermissionCommand } from "./cli/cmd/permission"
 import { WorkspaceCommand } from "./cli/cmd/workspace"
 import { TranslatorCommand } from "./cli/cmd/translator"
+import { IntentCommand } from "./cli/cmd/intent"
 
 const rawArgs = hideBin(process.argv)
 const args = rawArgs
@@ -137,6 +138,7 @@ const cli = yargs(args)
   .command(PermissionCommand)
   .command(WorkspaceCommand)
   .command(TranslatorCommand)
+  .command(IntentCommand)
   .fail((msg, err) => {
     if (
       msg?.startsWith("Unknown argument") ||
