@@ -40,6 +40,7 @@ import {
   type CompletedUsage,
 } from "./llm/budget"
 import { classifyTaskRequirements, supportsTaskRequirements, taskTextFromMessages } from "./llm/capability"
+import { rankCandidatesAfterPrimary } from "./llm/fallback-order"
 
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
@@ -408,7 +409,10 @@ const live: Layer.Layer<
               (alt) => !exactCandidates.some((ec) => ec.providerID === alt.providerID && ec.modelID === alt.modelID),
             )
 
-            const candidates = [...exactCandidates, ...filteredAlternatives] as const
+            // Preserve the current/manual route as candidate zero. Only later
+            // candidates are ranked by static local provider-policy category;
+            // no live quota, cost, account, key, or task data is inferred.
+            const candidates = rankCandidatesAfterPrimary([...exactCandidates, ...filteredAlternatives])
             const taskUsage = emptyTaskUsage()
             const taskRequirements = classifyTaskRequirements(taskTextFromMessages(input.messages))
             const onUsage = (usage: CompletedUsage & { provider: string }) => {
