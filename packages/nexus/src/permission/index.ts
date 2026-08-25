@@ -201,6 +201,19 @@ export function merge(...rulesets: PermissionV1.Ruleset[]): PermissionV1.Rule[] 
   return rulesets.flat()
 }
 
+/**
+ * Project config is an explicit baseline. Agent defaults and temporary session
+ * controls are deliberately later layers because `evaluate` uses last-match
+ * precedence. No project file is written by this helper.
+ */
+export function projectRules(
+  project: ConfigPermissionV1.Info | undefined,
+  agent: PermissionV1.Ruleset,
+  session: PermissionV1.Ruleset,
+): PermissionV1.Rule[] {
+  return merge(project ? fromConfig(project) : [], agent, session)
+}
+
 export function disabled(tools: string[], ruleset: PermissionV1.Ruleset): Set<string> {
   const edits = ["edit", "write", "apply_patch"]
   const reads = ["list_mcp_resources", "list_mcp_resource_templates", "read_mcp_resource"]
