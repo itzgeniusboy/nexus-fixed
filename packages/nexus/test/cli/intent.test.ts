@@ -51,6 +51,12 @@ describe("local intent inspection", () => {
       command: "role show",
       execution: "not-run",
     })
+    expect(inspectIntent("reviewer plan preview children 2 parallel 2 standard budget dikhao")).toMatchObject({
+      category: "agent-plan-preview",
+      plugin: "agent",
+      command: "plan preview",
+      execution: "not-run",
+    })
     expect(inspectIntent("agent ke saare roles list dikhao")).toMatchObject({
       category: "agent-role",
       plugin: "agent",
@@ -237,6 +243,38 @@ describe("local intent inspection", () => {
     expect(ambiguous.reason).toContain("at most one capability area")
     expect(runtime).toMatchObject({ execution: "blocked" })
     expect(reads).toBe(2)
+  })
+
+  test("executes only a bounded non-persistent agent plan preview and blocks runtime or invalid policy wording", async () => {
+    const previews: Array<{ role: string; children: number; parallel: number; budget: string }> = []
+    const options = {
+      agentPlanPreview: async (request: { role: "planner" | "coder" | "reviewer" | "tester"; children: number; parallel: number; budget: "low" | "standard" | "high" }) => {
+        previews.push(request)
+        return {
+          role: { name: request.role, basePolicy: "read-only" },
+          policy: { maxChildren: request.children, maxParallel: request.parallel, budgetClass: request.budget },
+          observedDevice: { platform: "desktop", architecture: "x64", cpuCores: 4, totalMemoryBytes: 8, freeMemoryBytes: 4, observedOnly: true },
+          guidance: "Observed local memory is compatible with the requested bounded plan; this is not a performance guarantee.",
+          persistentRunCreated: false,
+          agentStarted: false,
+          taskDelegated: false,
+        } as any
+      },
+    }
+    const safe = await executeLocalIntent("reviewer plan preview children 2 parallel 2 standard budget dikhao", options)
+    const unsafe = await executeLocalIntent("reviewer plan preview start agent", options)
+    const invalid = await executeLocalIntent("reviewer plan preview children 13 parallel 1", options)
+    const ambiguous = await executeLocalIntent("reviewer coder plan preview", options)
+
+    expect(safe).toMatchObject({ category: "agent-plan-preview", command: "plan preview", execution: "executed" })
+    expect(safe.result).toContain("Role: reviewer")
+    expect(safe.result).toContain("No agent was started, delegated, queued, persisted, or given a model task")
+    expect(previews).toEqual([{ role: "reviewer", children: 2, parallel: 2, budget: "standard" }])
+    expect(formatIntentExecution(safe, "table")).toContain("only a bounded local policy preview was formatted")
+    for (const blocked of [unsafe, invalid, ambiguous]) {
+      expect(blocked).toMatchObject({ category: "agent-plan-preview", execution: "blocked" })
+    }
+    expect(previews).toHaveLength(1)
   })
 
   test("runs bounded device readiness and known-workspace list locally but blocks sensitive routes", async () => {

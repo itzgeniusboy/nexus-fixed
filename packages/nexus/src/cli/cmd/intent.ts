@@ -5,6 +5,7 @@ import { apiVaultKeyPath, apiVaultPublicRows, apiVaultRows, getApiUsageBudget, g
 import { formatApiReadiness, formatApiRoutePreview, formatApiUsageBudget, formatApiVaultList } from "./api"
 import { formatSpecialistRole, formatSpecialistRoles, specialistRoleNames, type SpecialistRoleName } from "./agent-roles"
 import { agentCapabilityStatus, agentCapabilitySections, formatAgentCapabilityStatus, type AgentCapabilitySection, type AgentCapabilityStatus } from "./agent-status"
+import { createAgentPlanPreview, formatAgentPlanPreview, type AgentPlanPreview } from "./agent-plan-preview"
 import { collectDeviceReadiness, formatDeviceReadiness } from "./device"
 import { formatInstructionExplanation, formatInstructionStatus } from "./instructions"
 import { formatMemoryList, formatMemoryStatus, getLocalMemory, listLocalMemories, memoryStatus } from "./memory"
@@ -50,6 +51,7 @@ export type IntentInspection = {
     | "api-status"
     | "agent-role"
     | "agent-status"
+    | "agent-plan-preview"
     | "permission"
     | "device"
     | "instructions"
@@ -163,6 +165,12 @@ const intentRules: readonly IntentRule[] = [
     category: "api-status",
     plugin: "api",
     command: "list",
+  },
+  {
+    pattern: /(?=.*\b(?:planner|coder|reviewer|tester)\b)(?=.*\b(?:plan|preview)\b).*$/i,
+    category: "agent-plan-preview",
+    plugin: "agent",
+    command: "plan preview",
   },
   {
     pattern:
@@ -310,6 +318,8 @@ export type IntentExecutionOptions = {
   permissionExplanation?: (category: InspectablePermissionCategory) => Promise<string>
   /** Test-only local agent capability fixture; production only reads existing local metadata. */
   agentCapabilityStatus?: () => Promise<AgentCapabilityStatus>
+  /** Test-only non-persistent preview fixture; production observes only current local device signals. */
+  agentPlanPreview?: (input: { role: SpecialistRoleName; children: number; parallel: number; budget: "low" | "standard" | "high" }) => Promise<AgentPlanPreview>
 }
 
 function roleNamedIn(value: string): SpecialistRoleName | undefined {
@@ -381,6 +391,42 @@ function hasUnsafeAgentCapabilityStatusWording(value: string): boolean {
   )
 }
 
+type AgentPlanPreviewRequest = {
+  role: SpecialistRoleName
+  children: number
+  parallel: number
+  budget: "low" | "standard" | "high"
+}
+
+function singlePlanNumber(value: string, noun: "children" | "parallel"): number | undefined | "ambiguous" {
+  const singular = noun === "children" ? "child(?:ren)?" : "parallel"
+  const matches = Array.from(value.matchAll(new RegExp(`(?:\\b(-?\\d+)\\s+${singular}\\b|\\b${singular}\\s+(-?\\d+)\\b)`, "gi")))
+    .map((match) => Number(match[1] ?? match[2]))
+  if (matches.length > 1 || (new RegExp(`\\b${singular}\\b`, "i").test(value) && matches.length !== 1)) return "ambiguous"
+  return matches[0]
+}
+
+function requestedAgentPlanPreview(value: string): AgentPlanPreviewRequest | "ambiguous" {
+  const roles = specialistRoleNames.filter((role) => new RegExp(`\\b${role}\\b`, "i").test(value))
+  if (roles.length !== 1) return "ambiguous"
+  const children = singlePlanNumber(value, "children")
+  const parallel = singlePlanNumber(value, "parallel")
+  if (children === "ambiguous" || parallel === "ambiguous") return "ambiguous"
+  const budgetMatches = Array.from(value.matchAll(/(?:\b(low|standard|high)\s+budget\b|\bbudget\s+(low|standard|high)\b)/gi))
+    .map((match) => (match[1] ?? match[2]) as "low" | "standard" | "high")
+  if (budgetMatches.length > 1 || (/\bbudget\b/i.test(value) && budgetMatches.length !== 1)) return "ambiguous"
+  const request = { role: roles[0], children: children ?? 0, parallel: parallel ?? 1, budget: budgetMatches[0] ?? "standard" }
+  if (request.children < 0 || request.children > 12 || request.parallel < 1 || request.parallel > 12 || request.parallel > request.children + 1)
+    return "ambiguous"
+  return request
+}
+
+function hasUnsafeAgentPlanPreviewWording(value: string): boolean {
+  return /(?:[\\/]|--|\b(?:create|add|approve|reject|revoke|enable|disable|run|start|stop|poll|send|connect|credential|token|set|write|save|edit|delete|remove|clear|queue|persist|durable|idempotency)\b)/i.test(
+    value,
+  )
+}
+
 async function localAgentCapabilityStatus(options: IntentExecutionOptions): Promise<AgentCapabilityStatus> {
   if (options.agentCapabilityStatus) return options.agentCapabilityStatus()
   const store = new AgentPlatformStore()
@@ -397,6 +443,11 @@ async function localAgentCapabilityStatus(options: IntentExecutionOptions): Prom
   } finally {
     store.close()
   }
+}
+
+async function localAgentPlanPreview(request: AgentPlanPreviewRequest, options: IntentExecutionOptions): Promise<AgentPlanPreview> {
+  if (options.agentPlanPreview) return options.agentPlanPreview(request)
+  return createAgentPlanPreview({ ...request, device: await collectDeviceReadiness() })
 }
 
 function knownWorkspaceID(value: string, projects: Project.Info[]): string | undefined {
@@ -507,6 +558,26 @@ export async function executeLocalIntent(value: string, options: IntentExecution
       return { ...inspection, execution: "executed", result: formatAgentCapabilityStatus(await localAgentCapabilityStatus(options), "table", section) }
     } catch {
       return blockedExecution(inspection, "The local agent capability metadata could not be read; no runtime, schedule, agent, gateway, or configuration state changed.")
+    }
+  }
+  if (inspection.category === "agent-plan-preview" && inspection.command === "plan preview") {
+    if (hasUnsafeAgentPlanPreviewWording(value)) {
+      return blockedExecution(
+        inspection,
+        "Plan preview accepts only an explicit existing role and bounded local policy wording; no run, agent, queue, schedule, credential, remote request, or persistence was started.",
+      )
+    }
+    const request = requestedAgentPlanPreview(value)
+    if (request === "ambiguous") {
+      return blockedExecution(
+        inspection,
+        "Name exactly one supported role and use at most one bounded children, parallel, and budget value; children are 0–12, parallel is 1–12, and parallel cannot exceed lead plus children.",
+      )
+    }
+    try {
+      return { ...inspection, execution: "executed", result: formatAgentPlanPreview(await localAgentPlanPreview(request, options), "table") }
+    } catch {
+      return blockedExecution(inspection, "The bounded local plan preview could not be prepared; no run, agent, queue, schedule, source, session, provider, or remote state changed.")
     }
   }
   if (inspection.category === "agent-role") {
@@ -684,7 +755,9 @@ export function formatIntentExecution(result: IntentExecution, format: "table" |
       ? "Execution boundary: only the explicitly confirmed local workspace selection bookmark was cleared; no model call, plugin load, shell execution, remote request, key check, route selection, or other persistent preference change occurred."
       : result.category === "translation" && result.command === "confirmed report" && result.execution === "executed"
         ? `Execution boundary: only the explicitly confirmed new ${CONFIRMED_TRANSLATION_REPORT} metadata report was created; no source content was read, model/provider called, code transformed, existing file overwritten, shell command executed, or remote request made.`
-      : "Execution boundary: no model call, plugin load, shell execution, remote request, key check, write, route selection, or persistent preference occurred.",
+        : result.category === "agent-plan-preview" && result.execution === "executed"
+          ? "Execution boundary: only a bounded local policy preview was formatted from observed device signals; no run, agent, queue, schedule, source, session, provider, credential, remote request, or persistent state changed."
+        : "Execution boundary: no model call, plugin load, shell execution, remote request, key check, write, route selection, or persistent preference occurred.",
   )
   return lines.join(EOL)
 }
