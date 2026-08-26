@@ -77,6 +77,9 @@ export async function steerActiveTask(text: string, parts: readonly unknown[], d
       deps.clearInput()
       return { action: "change-replace", aborted: true, queued: 1 }
     }
+    // Yield once after the acknowledgement so the TUI can paint it before the
+    // queue mutation changes the session surface.
+    await yieldForRender()
     deps.enqueue({ kind: "followup", input: text, parts })
     deps.clearInput()
     return { action: "change-queue", aborted: false, queued: 1 }
@@ -85,9 +88,15 @@ export async function steerActiveTask(text: string, parts: readonly unknown[], d
   // Acknowledge synchronously before any side effect: the user's message must
   // produce a visible local response before queue writes or awaited work.
   deps.ack(STEERING_ACK.followup)
+  // Do not let the queue write occupy the same render turn as the local ack.
+  await yieldForRender()
   deps.enqueue({ kind: "followup", input: text, parts })
   deps.clearInput()
   return { action: "followup", aborted: false, queued: 1 }
+}
+
+function yieldForRender() {
+  return new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
 async function performAbort(deps: SteeringDeps): Promise<boolean> {
