@@ -11,7 +11,7 @@ import { expect, test } from "bun:test"
 import { testRender } from "@opentui/solid"
 import { ToastProvider, useToast } from "../../src/ui/toast"
 import { steerActiveTask } from "../../src/util/steering-flow"
-import { STEERING_ACK } from "../../src/util/steering"
+import { STEERING_ACK, steeringStatusLine } from "../../src/util/steering"
 
 function AckSurface(props: { onReady: (ack: (message: string) => void) => void }) {
   const toast = useToast()
@@ -111,8 +111,9 @@ test("status and follow-up acknowledgements render promptly under delayed sessio
     const ack = h.ack()
     // Delayed model/session work in flight: the acknowledgement must not wait for it.
     const slowWork = new Promise((resolve) => setTimeout(resolve, 200))
+    ack(steeringStatusLine(undefined))
 
-    const statusVisible = await h.frameContains("Status:")
+    const statusVisible = await h.frameContains(steeringStatusLine(undefined))
     expect(statusVisible).toBeGreaterThan(0)
 
     ack(STEERING_ACK.followup)
