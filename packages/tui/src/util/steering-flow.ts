@@ -82,8 +82,10 @@ export async function steerActiveTask(text: string, parts: readonly unknown[], d
     return { action: "change-queue", aborted: false, queued: 1 }
   }
 
-  deps.enqueue({ kind: "followup", input: text, parts })
+  // Acknowledge synchronously before any side effect: the user's message must
+  // produce a visible local response before queue writes or awaited work.
   deps.ack(STEERING_ACK.followup)
+  deps.enqueue({ kind: "followup", input: text, parts })
   deps.clearInput()
   return { action: "followup", aborted: false, queued: 1 }
 }
