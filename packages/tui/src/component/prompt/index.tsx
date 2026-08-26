@@ -42,7 +42,7 @@ import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { resolveAutoModel } from "../../util/auto-model"
-import { quarantinedRoutes } from "../../util/auto-route-quarantine"
+import { quarantinedRoutes, markAutoRoute } from "../../util/auto-route-quarantine"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
@@ -1124,6 +1124,11 @@ export function Prompt(props: PromptProps) {
         if (steered) return true
       }
       move.startSubmit()
+      // Track the exact route Auto resolved for this turn so a later 410/Gone
+      // can quarantine only Auto-selected routes, never manual choices.
+      if (local.model.isAuto() && sessionID) {
+        markAutoRoute(sessionID, selectedModel.providerID, selectedModel.modelID)
+      }
       sdk.client.session
         .prompt(
           {

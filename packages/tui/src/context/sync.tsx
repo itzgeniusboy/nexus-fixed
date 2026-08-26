@@ -33,7 +33,8 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
-import { goneRoute, quarantineRoute } from "../util/auto-route-quarantine"
+import { recordGoneRoute } from "../util/auto-route-quarantine"
+import { useToast } from "../ui/toast"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -68,6 +69,7 @@ export const {
   init: () => {
     const startup = useTuiStartup()
     const kv = useKV()
+    const toast = useToast()
     const permission = usePermission()
     const [store, setStore] = createStore<{
       status: "loading" | "partial" | "complete"
@@ -324,8 +326,7 @@ export const {
 
         case "message.updated": {
           touchMessage(event.properties.info.sessionID, event.properties.info.id)
-          const gone = event.properties.info.role === "assistant" ? goneRoute(event.properties.info) : undefined
-          if (gone) quarantineRoute(kv, gone.providerID, gone.modelID)
+          recordGoneRoute(event.properties.info, { kv, notify: toast.show })
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
             setStore("message", event.properties.info.sessionID, [event.properties.info])
