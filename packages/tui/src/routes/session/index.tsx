@@ -79,7 +79,15 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
-import { activityLabel } from "../../util/activity"
+import { liveActivity } from "../../util/activity"
+import {
+  acquireDispatch,
+  pendingPrompts,
+  releaseDispatchFailed,
+  steeringFlow,
+  type PendingPrompt,
+} from "../../prompt/steering-queue"
+import { steeringStatusLine } from "../../util/steering"
 import { NEXUS_BASE_MODE, useBindings, useCommandShortcut, useNexusKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
@@ -251,14 +259,41 @@ export function Session() {
   const activity = createMemo(() => {
     const current = lastAssistant()
     if (!current || current.time?.completed) return undefined
-    const parts = sync.data.part[current.id] ?? []
-    const running = parts.findLast(
-      (part): part is ToolPart => part.type === "tool" && ["pending", "running"].includes(part.state.status),
-    )
-    if (running) return activityLabel(running)
-    const streaming = parts.findLast((part) => part.type === "text" && part.text.trim())
-    if (!streaming) return "Thinking..."
-    return undefined
+    return liveActivity(sync.data.part[current.id] ?? [])
+  })
+
+  // Dispatch locally queued steering messages (follow-ups, stop remainders,
+  // approved cancel-and-replace) through the normal prompt path once the
+  // session becomes idle. No background worker or parallel dispatch involved.
+  // Plain tracked effect (not `on`): idle status, editor availability, and
+  // prompt-ref presence must all retrigger dispatch evaluation.
+  const [queueVersion, setQueueVersion] = createSignal(0)
+  onMount(() => {
+    const unsubscribe = pendingPrompts.subscribe(() => setQueueVersion((version) => version + 1))
+    onCleanup(unsubscribe)
+  })
+  const queuedItems = createMemo(() => {
+    queueVersion()
+    return pendingPrompts.list(route.sessionID)
+  })
+
+  createEffect(() => {
+    const type = sync.data.session_status[route.sessionID]?.type
+    const idle = !type || type === "idle"
+    if (!idle) {
+      steeringFlow.settle(route.sessionID)
+      return
+    }
+    const usable = visible() && Boolean(promptRef.current)
+    const item = acquireDispatch(route.sessionID, idle, usable)
+    if (!item) return
+    const ref = promptRef.current
+    if (!ref) {
+      releaseDispatchFailed(item)
+      return
+    }
+    ref.set({ input: item.input, parts: item.parts as PromptInfo["parts"], mode: "normal" })
+    ref.submit()
   })
 
   const dimensions = useTerminalDimensions()
@@ -1302,6 +1337,7 @@ export function Session() {
                 </For>
               </scrollbox>
               <box flexShrink={0}>
+                <SteeringQueue sessionID={route.sessionID} items={queuedItems()} />
                 <Show when={activity()}>
                   <box paddingLeft={3}>
                     <Spinner color={theme.textMuted}>{activity()}</Spinner>
@@ -1374,13 +1410,52 @@ export function Session() {
   )
 }
 
+/** Visible, editable, removable list of messages waiting for the active task to finish. */
+function SteeringQueue(props: { sessionID: string; items: PendingPrompt[] }) {
+  const { theme } = useTheme()
+  const promptRef = usePromptRef()
+
+  const editQueued = (item: PendingPrompt) => {
+    pendingPrompts.remove(item.id)
+    promptRef.current?.set({ input: item.input, parts: item.parts as PromptInfo["parts"], mode: "normal" })
+    promptRef.current?.focus()
+  }
+
+  return (
+    <Show when={props.items.length > 0}>
+      <box paddingLeft={3} flexDirection="column">
+        <For each={props.items}>
+          {(item) => (
+            <box flexDirection="row" gap={2}>
+              <text fg={theme.textMuted} flexShrink={0}>
+                {item.kind === "next" ? "next:" : "queued:"}
+              </text>
+              <text fg={theme.text}>{queuePreview(item.input)}</text>
+              <text fg={theme.textMuted} flexShrink={0} onMouseUp={() => editQueued(item)}>
+                edit
+              </text>
+              <text fg={theme.textMuted} flexShrink={0} onMouseUp={() => pendingPrompts.remove(item.id)}>
+                remove
+              </text>
+            </box>
+          )}
+        </For>
+      </box>
+    </Show>
+  )
+}
+
+function queuePreview(text: string) {
+  const line = text.split("\n")[0]
+  return line.length > 80 ? `${line.slice(0, 77)}…` : line
+}
+
 function UserMessage(props: {
   message: UserMessage
   parts: Part[]
   onMouseUp: () => void
   index: number
-}) {
-  const ctx = use()
+}) {  const ctx = use()
   const local = useLocal()
   const text = createMemo(() => {
     const texts = props.parts

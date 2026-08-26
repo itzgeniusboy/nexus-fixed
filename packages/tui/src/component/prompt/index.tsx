@@ -58,6 +58,10 @@ import { usePromptWorkspace } from "./workspace"
 import { usePromptMove } from "./move"
 import { readLocalAttachment } from "./local-attachment"
 import { useLocation } from "../../context/location"
+import { DialogSteeringChoice } from "../dialog-steering-choice"
+import { pendingPrompts } from "../../prompt/steering-queue"
+import { steerActiveTask as steerActiveTaskFlow } from "../../util/steering-flow"
+import { liveActivity } from "../../util/activity"
 
 registerNexusSpinner()
 
@@ -1099,6 +1103,12 @@ export function Prompt(props: PromptProps) {
         parts: nonTextParts.filter((x) => x.type === "file"),
       })
     } else {
+      // Active-task steering: while a task runs, classify the incoming
+      // message locally and handle it without a hidden parallel dispatch.
+      if (props.sessionID && status().type !== "idle") {
+        const steered = await steerActiveTask(sessionID, inputText, nonTextParts)
+        if (steered) return true
+      }
       move.startSubmit()
       sdk.client.session
         .prompt(
@@ -1153,6 +1163,40 @@ export function Prompt(props: PromptProps) {
     input.clear()
     if (finishMoveProgress) move.finishSubmit()
     return true
+  }
+
+  /**
+   * Thin adapter around the pure steering coordinator: binds SDK, dialog,
+   * toast, and the prompt store to the injected dependencies. Returns true
+   * when the message was consumed locally (status answer, stop, change
+   * choice, or queued follow-up) so no parallel model dispatch is started.
+   */
+  async function steerActiveTask(sessionID: string, text: string, nonTextParts: PromptInfo["parts"]) {
+    const currentStage = () => {
+      const current = sync.data.message[sessionID]?.findLast((x) => x.role === "assistant" && !x.time?.completed)
+      return current ? liveActivity(sync.data.part[current.id] ?? []) : undefined
+    }
+    await steerActiveTaskFlow(text, nonTextParts, {
+      currentStage,
+      abort: () => sdk.client.session.abort({ sessionID }, { throwOnError: true }),
+      ack: (message) => toast.show({ message, variant: "info", duration: 3000 }),
+      abortFailed: (error) => toast.show({ title: "Failed to stop task", message: errorMessage(error), variant: "error" }),
+      askChangeChoice: () => DialogSteeringChoice.show(dialog),
+      enqueue: (item) => pendingPrompts.add({ sessionID, ...item, parts: item.parts as PromptInfo["parts"] }),
+      clearInput: () => {
+        clearComposedPrompt()
+        props.onSubmit?.()
+      },
+    })
+    return true
+  }
+
+  /** Clears the composed prompt without touching prompt history. */
+  function clearComposedPrompt() {
+    input.extmarks.clear()
+    setStore("prompt", { input: "", parts: [] })
+    setStore("extmarkToPartIndex", new Map())
+    input.clear()
   }
 
   function pasteText(text: string, virtualText: string) {
