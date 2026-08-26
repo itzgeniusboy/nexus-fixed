@@ -42,6 +42,7 @@ import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { resolveAutoModel } from "../../util/auto-model"
+import { quarantinedRoutes, markAutoRoute } from "../../util/auto-route-quarantine"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
@@ -970,6 +971,27 @@ export function Prompt(props: PromptProps) {
       void exit()
       return true
     }
+
+    // Capture the exact submitted text and parts synchronously: active-task
+    // steering must classify and acknowledge before any await below.
+    const inputText = expandTrackedPastedText(
+      store.prompt.input,
+      input.extmarks.getAllForTypeId(promptPartTypeId).flatMap((extmark) => {
+        const partIndex = store.extmarkToPartIndex.get(extmark.id)
+        const part = partIndex === undefined ? undefined : store.prompt.parts[partIndex]
+        if (part?.type !== "text") return []
+        return [{ start: extmark.start, end: extmark.end, text: part.text }]
+      }),
+    )
+    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
+
+    // Active-task steering: while a task runs, capture the submitted message and
+    // answer locally before any model resolution, queue write, or session API.
+    if (props.sessionID && status().type !== "idle") {
+      const steered = await steerActiveTask(props.sessionID, inputText, nonTextParts)
+      if (steered) return true
+    }
+
     let selectedModel = local.model.current()
     if (!selectedModel) {
       void promptModelWarning()
@@ -980,8 +1002,21 @@ export function Prompt(props: PromptProps) {
         task: trimmed,
         hasImage: store.prompt.parts.some((part) => part.type === "file" && part.mime.startsWith("image/")),
         providers: sync.data.provider,
+        connected: sync.data.provider_next.connected,
+        keyHealth: sync.data.provider_keys,
+        quarantined: quarantinedRoutes(kv),
       })
-      if (resolved) selectedModel = resolved
+      // Never fall back silently to an unconfigured route; stop truthfully instead.
+      if (!resolved) {
+        toast.show({
+          message:
+            "No configured eligible model for Auto. Add an API key for a provider or select a model manually.",
+          variant: "warning",
+          duration: 5000,
+        })
+        return false
+      }
+      selectedModel = resolved
     }
 
     const workspaceSession = props.sessionID ? sync.session.get(props.sessionID) : undefined
@@ -1035,19 +1070,6 @@ export function Prompt(props: PromptProps) {
 
       sessionID = res.data.id
     }
-
-    const inputText = expandTrackedPastedText(
-      store.prompt.input,
-      input.extmarks.getAllForTypeId(promptPartTypeId).flatMap((extmark) => {
-        const partIndex = store.extmarkToPartIndex.get(extmark.id)
-        const part = partIndex === undefined ? undefined : store.prompt.parts[partIndex]
-        if (part?.type !== "text") return []
-        return [{ start: extmark.start, end: extmark.end, text: part.text }]
-      }),
-    )
-
-    // Filter out text parts (pasted content) since they're now expanded inline
-    const nonTextParts = store.prompt.parts.filter((part) => part.type !== "text")
 
     // Capture mode before it gets reset
     const currentMode = store.mode
@@ -1103,13 +1125,12 @@ export function Prompt(props: PromptProps) {
         parts: nonTextParts.filter((x) => x.type === "file"),
       })
     } else {
-      // Active-task steering: while a task runs, classify the incoming
-      // message locally and handle it without a hidden parallel dispatch.
-      if (props.sessionID && status().type !== "idle") {
-        const steered = await steerActiveTask(sessionID, inputText, nonTextParts)
-        if (steered) return true
-      }
       move.startSubmit()
+      // Track the exact route Auto resolved for this turn so a later 410/Gone
+      // can quarantine only Auto-selected routes, never manual choices.
+      if (local.model.isAuto() && sessionID) {
+        markAutoRoute(sessionID, selectedModel.providerID, selectedModel.modelID)
+      }
       sdk.client.session
         .prompt(
           {
@@ -1179,7 +1200,13 @@ export function Prompt(props: PromptProps) {
     await steerActiveTaskFlow(text, nonTextParts, {
       currentStage,
       abort: () => sdk.client.session.abort({ sessionID }, { throwOnError: true }),
-      ack: (message) => toast.show({ message, variant: "info", duration: 3000 }),
+      ack: (message) => {
+        toast.show({ message, variant: "info", duration: 3000 })
+        // Smallest safe flush: request a frame immediately so the fixed
+        // redacted acknowledgement becomes visible while the active turn
+        // is still producing output, instead of waiting for feed idle.
+        renderer.requestRender()
+      },
       abortFailed: (error) => toast.show({ title: "Failed to stop task", message: errorMessage(error), variant: "error" }),
       askChangeChoice: () => DialogSteeringChoice.show(dialog),
       enqueue: (item) => pendingPrompts.add({ sessionID, ...item, parts: item.parts as PromptInfo["parts"] }),
