@@ -1,7 +1,7 @@
 {
   "name": "@nexus-ai/desktop",
   "private": true,
-  "version": "1.18.19",
+  "version": "0.1.59",
   "type": "module",
   "license": "MIT",
   "homepage": "https://nexus.ai",

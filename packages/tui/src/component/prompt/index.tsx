@@ -41,6 +41,7 @@ import type { AssistantMessage, FilePart, UserMessage } from "@nexus-ai/sdk/v2"
 import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
+import { resolveAutoModel } from "../../util/auto-model"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
@@ -965,10 +966,18 @@ export function Prompt(props: PromptProps) {
       void exit()
       return true
     }
-    const selectedModel = local.model.current()
+    let selectedModel = local.model.current()
     if (!selectedModel) {
       void promptModelWarning()
       return false
+    }
+    if (local.model.isAuto()) {
+      const resolved = resolveAutoModel({
+        task: trimmed,
+        hasImage: store.prompt.parts.some((part) => part.type === "file" && part.mime.startsWith("image/")),
+        providers: sync.data.provider,
+      })
+      if (resolved) selectedModel = resolved
     }
 
     const workspaceSession = props.sessionID ? sync.session.get(props.sessionID) : undefined

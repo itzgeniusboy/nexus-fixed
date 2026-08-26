@@ -270,3 +270,7 @@ Issues may be flagged for:
 - Missing meaningful content
 
 If you believe your issue was incorrectly flagged, let a maintainer know.
+
+## Testing on low-memory devices
+
+On Android/Termux (`TERMUX_VERSION` set), `bash script/test-lowmem.sh` defaults to a sequential low-memory profile; set `NEXUS_FULL_TESTS=1` there to override, or force it anywhere with `NEXUS_LOW_MEMORY=1`. Each package's focused test directories run one `bun test` invocation at a time with `--max-concurrency=1`, and packages without `node_modules` are skipped instead of failing. Full-suite runs are opt-in: pass package names (e.g. `bash script/test-lowmem.sh core`) or set `NEXUS_FULL_TESTS=1`.

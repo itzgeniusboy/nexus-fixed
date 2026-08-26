@@ -92,6 +92,34 @@ test("persistent task records survive a new queue instance", async () => {
   }
 })
 
+test("crash recovery scans only non-terminal records older than the cutoff and keeps legacy files loadable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "nexus-crash-recovery-"))
+  const path = join(root, "queue.json")
+  try {
+    // Legacy record shape: no attempts field, written before crash recovery existed.
+    const legacy = { id: "legacy", task: "old task", root, state: "accepted", capacity: {}, createdAt: 1, updatedAt: 1 }
+    await writeFile(path, JSON.stringify({ version: 1, tasks: [legacy] }) + "\n", "utf8")
+    const manager = new SmartManager(new PersistentTaskQueue(path))
+    const tasks = await manager.list()
+    assert.equal(tasks.length, 1)
+    assert.equal(tasks[0]?.attempts, undefined)
+
+    const cutoff = Date.now()
+    await manager.accept("fresh", "new task", root)
+    assert.equal((await manager.task("fresh"))?.attempts, 1)
+    await manager.accept("paused-one", "paused task", root)
+    await manager.update("paused-one", "paused")
+    const stale = await manager.stalePending(cutoff)
+    assert.deepEqual(stale.map((task) => task.id), ["legacy"])
+
+    await manager.accept("done", "finished task", root)
+    await manager.update("done", "completed")
+    assert.ok(!(await manager.stalePending(Date.now() + 10_000)).some((task) => task.id === "done"))
+  } finally {
+    await rm(root, { recursive: true, force: true })
+  }
+})
+
 test("user task controls persist across a fresh liaison instance and wait for a safe checkpoint", async () => {
   const root = await mkdtemp(join(tmpdir(), "nexus-task-control-"))
   const queuePath = join(root, "queue.json")

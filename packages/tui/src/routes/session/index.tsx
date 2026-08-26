@@ -24,7 +24,7 @@ import { useEvent } from "../../context/event"
 import { SplitBorder } from "../../ui/border"
 import { useTuiPaths, useTuiTerminalEnvironment } from "../../context/runtime"
 import { Spinner } from "../../component/spinner"
-import { createSyntaxStyleMemo, generateSubtleSyntax, selectedForeground, useTheme } from "../../context/theme"
+import { createSyntaxStyleMemo, generateSubtleSyntax, useTheme } from "../../context/theme"
 import { BoxRenderable, ScrollBoxRenderable, addDefaultParsers, TextAttributes, RGBA } from "@opentui/core"
 import { Prompt, type PromptRef } from "../../component/prompt"
 import type {
@@ -79,6 +79,7 @@ import { collapseToolOutput } from "../../util/collapse-tool-output"
 import { usePluginRuntime } from "../../plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { getRevertDiffFiles } from "../../util/revert-diff"
+import { activityLabel } from "../../util/activity"
 import { NEXUS_BASE_MODE, useBindings, useCommandShortcut, useNexusKeymap } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
 import { LocationProvider } from "../../context/location"
@@ -241,16 +242,23 @@ export function Session() {
   const visible = createMemo(() => !session()?.parentID && permissions().length === 0 && questions().length === 0)
   const disabled = createMemo(() => permissions().length > 0 || questions().length > 0)
 
-  const pending = createMemo(() => {
-    const completed = messages().findLastIndex((message) => message.role === "assistant" && message.time.completed)
-    const pending = messages().findLastIndex(
-      (message, index) => index > completed && message.role === "assistant" && !message.time.completed,
-    )
-    return pending === -1 ? undefined : pending
-  })
-
   const lastAssistant = createMemo(() => {
     return messages().findLast((x) => x.role === "assistant")
+  })
+
+  // Live narration of what the agent is doing right now, derived only from
+  // already-streamed parts so the user never has to guess the current step.
+  const activity = createMemo(() => {
+    const current = lastAssistant()
+    if (!current || current.time?.completed) return undefined
+    const parts = sync.data.part[current.id] ?? []
+    const running = parts.findLast(
+      (part): part is ToolPart => part.type === "tool" && ["pending", "running"].includes(part.state.status),
+    )
+    if (running) return activityLabel(running)
+    const streaming = parts.findLast((part) => part.type === "text" && part.text.trim())
+    if (!streaming) return "Thinking..."
+    return undefined
   })
 
   const dimensions = useTerminalDimensions()
@@ -1280,7 +1288,6 @@ export function Session() {
                           }}
                           message={message as UserMessage}
                           parts={sync.data.part[message.id] ?? []}
-                          pending={pending()}
                         />
                       </Match>
                       <Match when={message.role === "assistant"}>
@@ -1295,6 +1302,11 @@ export function Session() {
                 </For>
               </scrollbox>
               <box flexShrink={0}>
+                <Show when={activity()}>
+                  <box paddingLeft={3}>
+                    <Spinner color={theme.textMuted}>{activity()}</Spinner>
+                  </box>
+                </Show>
                 <Show when={permissions().length > 0}>
                   <PermissionPrompt
                     request={permissions()[0]}
@@ -1367,7 +1379,6 @@ function UserMessage(props: {
   parts: Part[]
   onMouseUp: () => void
   index: number
-  pending?: number
 }) {
   const ctx = use()
   const local = useLocal()
@@ -1385,10 +1396,10 @@ function UserMessage(props: {
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
-  const queued = createMemo(() => props.pending !== undefined && props.index > props.pending)
   const color = createMemo(() => local.agent.color(props.message.agent))
-  const queuedFg = createMemo(() => selectedForeground(theme, color()))
-  const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
+  // Steered inputs join the running turn instead of waiting, so no QUEUED badge:
+  // every user message is acknowledged immediately.
+  const metadataVisible = createMemo(() => ctx.showTimestamps())
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
 
@@ -1435,20 +1446,11 @@ function UserMessage(props: {
                 </For>
               </box>
             </Show>
-            <Show
-              when={queued()}
-              fallback={
-                <Show when={ctx.showTimestamps()}>
-                  <text fg={theme.textMuted}>
-                    <span style={{ fg: theme.textMuted }}>
-                      {Locale.todayTimeOrDateTime(props.message.time.created)}
-                    </span>
-                  </text>
-                </Show>
-              }
-            >
+            <Show when={ctx.showTimestamps()}>
               <text fg={theme.textMuted}>
-                <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
+                <span style={{ fg: theme.textMuted }}>
+                  {Locale.todayTimeOrDateTime(props.message.time.created)}
+                </span>
               </text>
             </Show>
           </box>
@@ -1490,8 +1492,22 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
   const childShortcut = useCommandShortcut("session.child.first")
   const backgroundShortcut = useCommandShortcut("session.background")
 
+  // Acknowledge the turn instantly while the model warms up: show a live
+  // indicator until the first visible text or tool output streams in.
+  const quiet = createMemo(
+    () =>
+      !final() &&
+      !props.message.time.completed &&
+      !props.parts.some((x) => (x.type === "text" && x.text.trim()) || x.type === "tool"),
+  )
+
   return (
     <>
+      <Show when={quiet()}>
+        <box paddingLeft={3} paddingTop={1}>
+          <Spinner color={local.agent.color(props.message.agent)}>Working...</Spinner>
+        </box>
+      </Show>
       <For each={props.parts}>
         {(part, index) => {
           const component = createMemo(() => PART_MAPPING[part.type as keyof typeof PART_MAPPING])

@@ -1,0 +1,26 @@
+name: lockfile
+
+on:
+  pull_request:
+
+jobs:
+  lockfile-sync:
+    name: lockfile drift check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: Resolve dependencies
+        run: bun install
+      - name: Fail if resolution changed bun.lock
+        run: |
+          if ! git diff --quiet -- bun.lock; then
+            echo "::group::Lockfile drift detected — resolved changes below"
+            git diff -- bun.lock
+            echo "::endgroup::"
+            echo "Commit the printed bun.lock changes, or align package.json manifests with bun.lock."
+            exit 1
+          fi
+          echo "bun.lock is in sync with all package.json manifests."

@@ -20,4 +20,8 @@ OpenRouter documents free-model limits of 20 RPM and 50 RPD for accounts with fe
 4. **Paid, trial, or unverified recurring allocation:** remaining providers, alphabetical after the existing capability/contract order.
 5. **Custom endpoint:** always last.
 
+### No fixed quota figures policy
+
+The picker deliberately shows only qualitative, account-agnostic category order and condition badges. Even officially published figures (Cloudflare Workers AI's daily Neuron allocation, OpenRouter's request-per-day thresholds) stay out of visible copy and out of ordering logic: a number next to a provider can read as an account balance, entitlement, or live quota promise, which the ranking must never imply.
+
 The application must retain manual provider choice and must not contact a provider, inspect a key, estimate balance, or alter routing merely to display this ranking.

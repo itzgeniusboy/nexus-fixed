@@ -375,6 +375,9 @@ const live: Layer.Layer<
       }
     })
 
+    // Process-global memory of the route that most recently completed a turn.
+    let lastGoodRoute: { providerID: string; modelID: string } | undefined
+
     const stream: Interface["stream"] = (input) =>
       Stream.scoped(
         Stream.unwrap(
@@ -412,7 +415,33 @@ const live: Layer.Layer<
             // Preserve the current/manual route as candidate zero. Only later
             // candidates are ranked by static local provider-policy category;
             // no live quota, cost, account, key, or task data is inferred.
-            const candidates = rankCandidatesAfterPrimary([...exactCandidates, ...filteredAlternatives])
+            const ranked = rankCandidatesAfterPrimary([...exactCandidates, ...filteredAlternatives])
+            // Promote the route that most recently succeeded in this process so
+            // later turns stop re-burning through known-bad fallbacks. Candidate
+            // zero (manual/current choice) always stays first.
+            const promoted =
+              lastGoodRoute &&
+              !ranked.some(
+                (candidate) =>
+                  candidate.providerID === lastGoodRoute.providerID && candidate.modelID === lastGoodRoute.modelID,
+              )
+                ? [
+                    {
+                      providerID: lastGoodRoute.providerID as ProviderV2.ID,
+                      modelID: lastGoodRoute.modelID as ModelV2.ID,
+                    },
+                  ]
+                : []
+            const candidates = [
+              ranked[0],
+              ...promoted,
+              ...ranked.slice(1).filter(
+                (candidate) =>
+                  !promoted.some(
+                    (entry) => entry.providerID === candidate.providerID && entry.modelID === candidate.modelID,
+                  ),
+              ),
+            ]
             const taskUsage = emptyTaskUsage()
             const taskRequirements = classifyTaskRequirements(taskTextFromMessages(input.messages))
             const onUsage = (usage: CompletedUsage & { provider: string }) => {
@@ -476,6 +505,11 @@ const live: Layer.Layer<
                     yield* provider.invalidateLanguage(candidate.providerID, candidate.modelID)
                     const sameProviderKeyCount = yield* provider.rotationKeyCount(candidate.providerID)
                     if (sameProviderKeyCount > retryCount + 1) {
+                      // Exponential backoff keeps rate-limited key rotation from
+                      // hammering the provider; credential failures retry at once.
+                      if (rateLimited) {
+                        yield* Effect.sleep(`${Math.min(2 ** retryCount * 1000, 8000)} millis`)
+                      }
                       yield* Effect.logWarning("provider failed; retrying same provider with next key", {
                         providerID: candidate.providerID,
                         modelID: candidate.modelID,
@@ -520,6 +554,7 @@ const live: Layer.Layer<
                   return yield* attempt(rest, 0)
                 }
                 const current = yield* toStream(modelExit.value)
+                lastGoodRoute = { providerID: candidate.providerID, modelID: candidate.modelID }
 
                 // Hook to reset failures on success
                 const currentUsedKey = yield* provider.currentKey(candidate.providerID)

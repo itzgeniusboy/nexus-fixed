@@ -20,6 +20,7 @@
     "random": "echo 'Random script'",
     "sso": "aws sso login --sso-session=nexus --no-browser",
     "translate:app": "bun run script/translate-app.ts",
+    "test:lowmem": "bash script/test-lowmem.sh",
     "test": "echo 'do not run tests from root' && exit 1"
   },
   "workspaces": {

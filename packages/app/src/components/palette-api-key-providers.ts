@@ -36,7 +36,7 @@ export const NEXUS_API_KEY_PROVIDERS: NexusApiKeyProvider[] = [
     access: "verified-recurring",
     rank: 10,
     badge: "Verified daily allocation",
-    detail: "10k Neurons/day; some models and account plans have conditions",
+    detail: "Some models and account plans have conditions",
   },
   {
     id: "groq",

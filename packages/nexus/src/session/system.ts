@@ -80,6 +80,7 @@ const layer = Layer.effect(
             `  Platform: ${process.platform}`,
             `  Today's date: ${new Date().toDateString()}`,
             `</env>`,
+            `Always respond in the same language and script the user last used.`,
           ].join("\n"),
           references.length === 0
             ? undefined

@@ -30,6 +30,9 @@ export type CapacityProbe = {
 export type PersistedTaskState = "accepted" | "running" | "paused" | "cancelled" | "completed" | "failed"
 export type TaskControlAction = "pause" | "cancel" | "update" | "resume"
 
+export const INTERRUPTED_BY_RESTART = "interrupted by restart"
+export const MAX_TASK_ATTEMPTS = 3
+
 export type TaskControl = {
   action: TaskControlAction
   instruction?: string
@@ -53,6 +56,8 @@ export type PersistedTask = {
   updatedAt: number
   error?: string
   control?: TaskControl
+  /** Dispatch count including the current run; absent in queue files written before crash recovery existed. */
+  attempts?: number
 }
 
 type TaskStore = {
@@ -195,9 +200,9 @@ export class SmartManager {
     return detectCapacity(this.capacityProbe)
   }
 
-  async accept(id: string, task: string, root: string, capacity = this.capacity) {
+  async accept(id: string, task: string, root: string, capacity = this.capacity, attempts = 1) {
     const now = Date.now()
-    return this.taskStore.upsert({ id, task, root, capacity, state: "accepted", createdAt: now, updatedAt: now })
+    return this.taskStore.upsert({ id, task, root, capacity, state: "accepted", attempts, createdAt: now, updatedAt: now })
   }
 
   async update(id: string, state: PersistedTaskState, error?: string) {
@@ -205,6 +210,12 @@ export class SmartManager {
     const current = tasks.find((task) => task.id === id)
     if (!current) return undefined
     return this.taskStore.upsert({ ...current, state, error, updatedAt: Date.now() })
+  }
+
+  // "paused" is deliberately excluded: pausing is a user decision that must survive restarts.
+  async stalePending(before: number) {
+    return (await this.taskStore.list()).filter((task) =>
+      (task.state === "accepted" || task.state === "running") && task.updatedAt < before)
   }
 
   async task(id: string) {

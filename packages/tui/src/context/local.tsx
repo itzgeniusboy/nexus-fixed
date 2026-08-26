@@ -153,12 +153,14 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           modelID: string
         }[]
         variant: Record<string, string | undefined>
+        auto: Record<string, boolean>
       }>({
         ready: false,
         model: {},
         recent: [],
         favorite: [],
         variant: {},
+        auto: {},
       })
 
       const filePath = path.join(paths.state, "model.json")
@@ -176,6 +178,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           recent: modelStore.recent,
           favorite: modelStore.favorite,
           variant: modelStore.variant,
+          auto: modelStore.auto,
         })
       }
 
@@ -187,6 +190,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
           if (Array.isArray(value.favorite)) setModelStore("favorite", value.favorite)
           if (typeof value.variant === "object" && value.variant !== null)
             setModelStore("variant", value.variant as Record<string, string | undefined>)
+          if (typeof value.auto === "object" && value.auto !== null)
+            setModelStore("auto", value.auto as Record<string, boolean>)
         })
         .catch(() => {})
         .finally(() => {
@@ -330,11 +335,23 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
             const a = agent.current()
             if (!a) return
             setModelStore("model", a.name, model)
+            // A manual selection overrides Auto for this agent until re-enabled.
+            if (modelStore.auto[a.name]) setModelStore("auto", a.name, false)
             if (options?.recent) {
               setModelStore("recent", recentModels(model, modelStore.recent))
               save()
             }
           })
+        },
+        isAuto() {
+          const a = agent.current()
+          return a ? (modelStore.auto[a.name] ?? false) : false
+        },
+        setAuto(value: boolean) {
+          const a = agent.current()
+          if (!a) return
+          setModelStore("auto", a.name, value)
+          save()
         },
         toggleFavorite(model: { providerID: string; modelID: string }) {
           batch(() => {

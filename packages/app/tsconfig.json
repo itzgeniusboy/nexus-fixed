@@ -18,9 +18,11 @@
     "outDir": "node_modules/.ts-dist",
     "isolatedModules": true,
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@nexus-ai/client": ["../client/src/index.ts"],
+      "@nexus-ai/client/*": ["../client/src/*"]
     }
   },
-  "include": ["src", "package.json"],
-  "exclude": ["dist", "ts-dist"]
+  "include": ["src", "../client/src", "package.json"],
+  "exclude": ["dist", "ts-dist", "../client/src/contract.ts", "../client/src/effect.ts", "../client/src/generated-effect", "../client/src/legacy-promise/**/*.js"]
 }

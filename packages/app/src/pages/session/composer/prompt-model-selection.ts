@@ -1,5 +1,6 @@
 import { batch, createMemo, startTransition } from "solid-js"
 import { useModels } from "@/context/models"
+import { classifyTaskRequirements, type AutoModelRequirements } from "@/context/auto-model"
 import type { ModelKey, ModelSelection } from "@/context/local"
 import { cycleModelVariant, getConfiguredAgentVariant, resolveModelVariant } from "@/context/model-variant"
 import { usePrompt } from "@/context/prompt"
@@ -50,9 +51,49 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
       .filter((item): item is NonNullable<typeof item> => !!item),
   )
 
+  const resolveAuto = (requirements: AutoModelRequirements = {}) => {
+    const supports = (item: NonNullable<ReturnType<typeof models.find>>) =>
+      (!requirements.tools || item.capabilities.toolcall) &&
+      (!requirements.vision || item.capabilities.attachment || item.capabilities.input.image) &&
+      (!requirements.longContext || (item.limit?.context ?? 0) >= 64_000) &&
+      (!requirements.reasoning || item.capabilities.reasoning)
+    const preferred = configured()
+    const preferredItem = preferred ? models.find(preferred) : undefined
+    if (preferredItem && supports(preferredItem)) return preferredItem
+    const selected = models
+      .list()
+      .filter((item) => valid({ providerID: item.provider.id, modelID: item.id }))
+      .filter(supports)
+      .sort((a, b) => {
+        const score = (item: typeof a) =>
+          (item.capabilities.toolcall ? 100_000 : 0) +
+          (item.capabilities.attachment || item.capabilities.input.image ? 10_000 : 0) +
+          (item.capabilities.reasoning ? 1_000 : 0) +
+          Math.min(item.limit?.output ?? 0, 32_000)
+        return score(b) - score(a) || a.name.localeCompare(b.name)
+      })[0]
+    if (selected) return selected
+    const fallbackItem = fallback()
+    return fallbackItem && valid(fallbackItem) ? models.find(fallbackItem) : undefined
+  }
+
+  const resolve = (requirements: AutoModelRequirements = {}) => {
+    const selected = prompt.model.current()
+    if (selected && valid({ providerID: selected.providerID, modelID: selected.modelID }))
+      return models.find(selected)
+    return resolveAuto(requirements)
+  }
+
   const selection = {
     ready: models.ready,
     current,
+    resolve,
+    resolveForTask(task: string) {
+      return resolve(classifyTaskRequirements(task))
+    },
+    isAuto() {
+      return !prompt.model.current()
+    },
     recent: recentModels,
     list: models.list,
     cycle(direction: 1 | -1) {
@@ -72,9 +113,12 @@ export function createPromptModelSelection(input: { agent: () => { model?: Model
           models.setVisibility(item, true)
           if (options?.recent) models.recent.push(item)
         }),
-      )
-    },
-    visible: models.visible,
+        )
+      },
+      setAuto() {
+        this.set(undefined)
+      },
+      visible: models.visible,
     setVisibility: models.setVisibility,
     variant: {
       configured() {

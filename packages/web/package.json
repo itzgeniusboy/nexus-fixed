@@ -2,7 +2,7 @@
   "name": "@nexus-ai/web",
   "type": "module",
   "license": "MIT",
-  "version": "1.18.19",
+  "version": "0.1.59",
   "scripts": {
     "dev": "astro dev",
     "dev:remote": "VITE_API_URL=https://api.nexus.ai astro dev",

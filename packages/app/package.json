@@ -1,6 +1,6 @@
 {
   "name": "@nexus-ai/app",
-  "version": "1.18.19",
+  "version": "0.1.59",
   "description": "",
   "type": "module",
   "exports": {

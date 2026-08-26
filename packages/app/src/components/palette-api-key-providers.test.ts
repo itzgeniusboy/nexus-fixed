@@ -33,6 +33,14 @@ describe("NEXUS API provider picker policy", () => {
     })
   })
 
+  test("never shows fixed quota figures or account-balance implications", () => {
+    for (const provider of NEXUS_API_KEY_PROVIDERS) {
+      expect(provider.badge ?? "").not.toMatch(/\d/)
+      expect(provider.detail ?? "").not.toMatch(/\d/)
+      expect(Object.keys(provider)).not.toContain("freeDaily")
+    }
+  })
+
   test("keeps custom onboarding available while omitting fabricated free-quota badges", () => {
     expect(NEXUS_API_KEY_PROVIDERS.find((provider) => provider.id === "custom")).toMatchObject({ access: "custom" })
     expect(

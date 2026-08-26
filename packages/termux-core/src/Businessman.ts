@@ -6,8 +6,12 @@ import { BotAgent } from "./agents/BotAgent"
 import { DebugAgent } from "./agents/DebugAgent"
 import { ToolAgent } from "./agents/ToolAgent"
 import { SmartManager } from "./agents/SmartManager"
+import { INTERRUPTED_BY_RESTART, MAX_TASK_ATTEMPTS } from "./agents/SmartManager"
+import type { PersistedTask } from "./agents/SmartManager"
 import { readPowerStatus, workloadPolicy } from "@nexus-ai/core/power"
 import { ServiceManager } from "./ServiceManager"
+import { runtimeGuard } from "./RuntimeGuard"
+import type { RuntimeGuardVerdict } from "./RuntimeGuard"
 import type { PowerStatus } from "@nexus-ai/core/power"
 
 export type BusinessmanResult = {
@@ -19,6 +23,25 @@ export type BusinessmanResult = {
   savedMB: number
 }
 
+export type HandleTaskOptions = {
+  /** Attempts already spent by earlier records for the same logical task; the fresh dispatch becomes inheritedAttempts + 1. */
+  inheritedAttempts?: number
+}
+
+export type InterruptedTaskRecovery = {
+  id: string
+  task: string
+  action: "failed" | "resumed" | "skipped"
+  attempts: number
+  jobId?: string
+  reason?: string
+}
+
+export type RecoverySummary = {
+  interrupted: number
+  recoveries: InterruptedTaskRecovery[]
+}
+
 export type BusinessmanDependencies = {
   staff?: StaffManager
   botAgent?: Pick<BotAgent, "execute">
@@ -26,7 +49,8 @@ export type BusinessmanDependencies = {
   debugAgent?: Pick<DebugAgent, "execute">
   services?: Pick<ServiceManager, "acquireWakeLock" | "releaseWakeLock" | "notify" | "toast">
   readPowerStatus?: () => Promise<PowerStatus>
-  queue?: Pick<SmartManager, "accept" | "update">
+  queue?: Pick<SmartManager, "accept" | "update"> & Partial<Pick<SmartManager, "stalePending" | "list">>
+  runtimeGuard?: () => Promise<RuntimeGuardVerdict>
 }
 
 export class Businessman {
@@ -38,7 +62,10 @@ export class Businessman {
   private readonly debugAgent: Pick<DebugAgent, "execute">
   private readonly services: Pick<ServiceManager, "acquireWakeLock" | "releaseWakeLock" | "notify" | "toast">
   private readonly powerStatusReader: () => Promise<PowerStatus>
-  private readonly queue: Pick<SmartManager, "accept" | "update">
+  private readonly queue: Pick<SmartManager, "accept" | "update"> & Partial<Pick<SmartManager, "stalePending" | "list">>
+  private readonly deviceGuard: () => Promise<RuntimeGuardVerdict>
+  private readonly startedAt = Date.now()
+  private recoveryRun?: Promise<RecoverySummary>
 
   constructor(dependencies: BusinessmanDependencies = {}) {
     this.staff = dependencies.staff ?? new StaffManager()
@@ -48,14 +75,18 @@ export class Businessman {
     this.services = dependencies.services ?? new ServiceManager()
     this.powerStatusReader = dependencies.readPowerStatus ?? readPowerStatus
     this.queue = dependencies.queue ?? new SmartManager()
+    this.deviceGuard = dependencies.runtimeGuard ?? runtimeGuard
   }
 
-  async handleTask(userCommand: string): Promise<BusinessmanResult> {
+  async handleTask(userCommand: string, options: HandleTaskOptions = {}): Promise<BusinessmanResult> {
+    await this.ensureRecovered()
+    const attempts = (options.inheritedAttempts ?? 0) + 1
     const jobId = `job-${Date.now().toString(36)}`
     const plan = this.staff.brain.analyze(userCommand)
     this.activeJobs.set(jobId, { command: userCommand, startedAt: Date.now() })
     // Persist the task record before the CLI acknowledges acceptance.
-    await this.queue.accept(jobId, userCommand, process.cwd())
+    // Capacity is left undefined so SmartManager applies its default plan.
+    await this.queue.accept(jobId, userCommand, process.cwd(), undefined, attempts)
     const power = await this.powerStatusReader()
     const policy = workloadPolicy(power)
     let wakeLockHeld = false
@@ -79,6 +110,7 @@ export class Businessman {
       const matchedWorkers = this.staff.brain.matchFreelancers(plan)
       const selectedWorkers = policy.maxConcurrency ? matchedWorkers.slice(0, policy.maxConcurrency) : matchedWorkers
       for (const worker of selectedWorkers) {
+        await this.assertDeviceReady()
         const result = await this.staff.hire.hire(worker)
         hired.push({ name: worker, success: result.success, sizeMB: result.sizeMB, alreadyThere: result.alreadyThere })
       }
@@ -91,6 +123,7 @@ export class Businessman {
         throw new Error(`dependency installation failed for: ${names}`)
       }
 
+      await this.assertDeviceReady()
       console.log("⚒️ Starting task execution...")
       const hiredWorkers = hired.filter((worker) => worker.success).map((worker) => worker.name)
       const context = { hiredWorkers }
@@ -131,6 +164,43 @@ export class Businessman {
     }
   }
 
+  async recoverInterrupted(): Promise<RecoverySummary> {
+    const stale = (await this.queue.stalePending?.(this.startedAt)) ?? []
+    const recoveries: InterruptedTaskRecovery[] = []
+    for (const record of stale) {
+      console.warn(`⚠️ Task ${record.id} was accepted before this process started and never finished; treating it as interrupted by a restart.`)
+      await this.queue.update(record.id, "failed", INTERRUPTED_BY_RESTART).catch(() => undefined)
+      recoveries.push({ id: record.id, task: record.task, action: "failed", attempts: record.attempts ?? 1 })
+    }
+    if (recoveries.length > 0)
+      console.warn(`⚠️ Crash recovery marked ${recoveries.length} interrupted task(s) as failed. Call resumePending() to re-run them.`)
+    return { interrupted: recoveries.length, recoveries }
+  }
+
+  async resumePending(): Promise<InterruptedTaskRecovery[]> {
+    await this.ensureRecovered()
+    const interrupted = ((await this.queue.list?.()) ?? [])
+      .filter((record) => record.state === "failed" && record.error === INTERRUPTED_BY_RESTART)
+    const outcomes: InterruptedTaskRecovery[] = []
+    for (const record of interrupted) {
+      const previousAttempts = record.attempts ?? 1
+      if (previousAttempts >= MAX_TASK_ATTEMPTS) {
+        console.warn(`⚠️ Skipping ${record.id}: attempt limit of ${MAX_TASK_ATTEMPTS} reached; refusing to re-run it.`)
+        await this.queue
+          .update(record.id, "failed", `${INTERRUPTED_BY_RESTART}; attempt limit of ${MAX_TASK_ATTEMPTS} reached`)
+          .catch(() => undefined)
+        outcomes.push({ id: record.id, task: record.task, action: "skipped", attempts: previousAttempts, reason: `attempt limit of ${MAX_TASK_ATTEMPTS} reached` })
+        continue
+      }
+      console.log(`🔁 Re-running interrupted task ${record.id} from its original instruction (attempt ${previousAttempts + 1} of ${MAX_TASK_ATTEMPTS}).`)
+      outcomes.push(await this.dispatchRetry(record))
+    }
+    const resumed = outcomes.filter((outcome) => outcome.action === "resumed").length
+    if (outcomes.length > 0)
+      console.log(`📋 Resume summary: ${resumed} re-dispatched, ${outcomes.length - resumed} skipped, of ${outcomes.length} interrupted task(s).`)
+    return outcomes
+  }
+
   async askUser(prompt: string): Promise<boolean> {
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
       console.log(`${prompt} n (non-interactive default)`)
@@ -143,5 +213,34 @@ export class Businessman {
     } finally {
       rl.close()
     }
+  }
+
+  private ensureRecovered(): Promise<RecoverySummary> {
+    this.recoveryRun ??= this.recoverInterrupted()
+    return this.recoveryRun
+  }
+
+  // Retries go through the normal flow so they get the same persistence, guards, and notifications.
+  private async dispatchRetry(record: PersistedTask): Promise<InterruptedTaskRecovery> {
+    const attempts = (record.attempts ?? 1) + 1
+    const outcome = await this.handleTask(record.task, { inheritedAttempts: attempts - 1 })
+      .then((result): InterruptedTaskRecovery => ({ id: record.id, task: record.task, action: "resumed", attempts, jobId: result.jobId }))
+      .catch((error: unknown): InterruptedTaskRecovery => ({
+        id: record.id,
+        task: record.task,
+        action: "resumed",
+        attempts,
+        reason: error instanceof Error ? error.message : String(error),
+      }))
+    // Retag the old record only after a completed retry so a failed retry stays eligible until the cap stops it.
+    if (outcome.jobId)
+      void this.queue.update(record.id, "failed", `${INTERRUPTED_BY_RESTART}; resumed as ${outcome.jobId}`).catch(() => undefined)
+    return outcome
+  }
+
+  private async assertDeviceReady() {
+    const verdict = await this.deviceGuard()
+    if (verdict.ok) return
+    throw new Error(`aborted by device guard: ${verdict.reason}`)
   }
 }
