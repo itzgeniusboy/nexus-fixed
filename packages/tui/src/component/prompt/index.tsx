@@ -42,6 +42,7 @@ import { Locale } from "../../util/locale"
 import { errorMessage } from "../../util/error"
 import { formatDuration } from "../../util/format"
 import { resolveAutoModel } from "../../util/auto-model"
+import { quarantinedRoutes } from "../../util/auto-route-quarantine"
 import { createColors, createFrames } from "../../ui/spinner"
 import { useDialog } from "../../ui/dialog"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
@@ -980,8 +981,21 @@ export function Prompt(props: PromptProps) {
         task: trimmed,
         hasImage: store.prompt.parts.some((part) => part.type === "file" && part.mime.startsWith("image/")),
         providers: sync.data.provider,
+        connected: sync.data.provider_next.connected,
+        keyHealth: sync.data.provider_keys,
+        quarantined: quarantinedRoutes(kv),
       })
-      if (resolved) selectedModel = resolved
+      // Never fall back silently to an unconfigured route; stop truthfully instead.
+      if (!resolved) {
+        toast.show({
+          message:
+            "No configured eligible model for Auto. Add an API key for a provider or select a model manually.",
+          variant: "warning",
+          duration: 5000,
+        })
+        return false
+      }
+      selectedModel = resolved
     }
 
     const workspaceSession = props.sessionID ? sync.session.get(props.sessionID) : undefined

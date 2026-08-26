@@ -101,3 +101,81 @@ test("deprecated models are never selected", () => {
   const result = resolveAutoModel({ task: "hii", providers: [stale] })
   expect(result).toBeUndefined()
 })
+
+test("catalog providers without configured credentials are never selected", () => {
+  const result = resolveAutoModel({
+    task: "hii",
+    providers,
+    connected: ["strong"],
+  })
+  expect(result?.providerID).toBe("strong")
+  expect(result?.modelID).toBe("bigreasoner")
+})
+
+test("nothing is selected when no provider is connected", () => {
+  const result = resolveAutoModel({ task: "hii", providers, connected: [] })
+  expect(result).toBeUndefined()
+})
+
+test("a provider with multiple keys stays eligible while one usable key remains", () => {
+  const keyHealth = [{ provider: "cheap", keys: [{ status: "invalid" }, { status: "active" }] }]
+  const result = resolveAutoModel({ task: "hii", providers: [providers[0]], connected: ["cheap"], keyHealth })
+  expect(result?.providerID).toBe("cheap")
+})
+
+test("a provider whose every key is locally known-bad is never selected", () => {
+  const keyHealth = [{ provider: "cheap", keys: [{ status: "invalid" }, { status: "suspended" }] }]
+  const result = resolveAutoModel({ task: "hii", providers: [providers[0]], connected: ["cheap"], keyHealth })
+  expect(result).toBeUndefined()
+})
+
+test("quarantined routes fall back to another configured compatible route", () => {
+  const result = resolveAutoModel({
+    task: "hii",
+    providers,
+    connected: ["cheap", "strong"],
+    quarantined: ["cheap/cheapchat"],
+  })
+  expect(result?.providerID).toBe("strong")
+})
+
+test("quarantine is exact-route: other models on the same provider stay eligible", () => {
+  const both = provider("cheap", {
+    cheapchat: model({ id: "cheapchat" }),
+    cheapalt: model({ id: "cheapalt", cost: { input: 0.00002, output: 0.00004, cache: { read: 0, write: 0 } } }),
+  })
+  const result = resolveAutoModel({
+    task: "hii",
+    providers: [both],
+    connected: ["cheap"],
+    quarantined: ["cheap/cheapchat"],
+  })
+  expect(result?.providerID).toBe("cheap")
+  expect(result?.modelID).toBe("cheapalt")
+})
+
+test("no compatible route exists when every eligible route is quarantined", () => {
+  const result = resolveAutoModel({
+    task: "hii",
+    providers: [providers[0]],
+    connected: ["cheap"],
+    quarantined: ["cheap/cheapchat"],
+  })
+  expect(result).toBeUndefined()
+})
+
+test("the choice carries only fixed redacted fields", () => {
+  const result = resolveAutoModel({
+    task: "hii",
+    providers,
+    connected: ["cheap"],
+    keyHealth: [{ provider: "cheap", keys: [{ status: "sk-secret-material" }] }],
+  })
+  expect(Object.keys(result ?? {}).sort()).toEqual(["modelID", "providerID", "reason"])
+  expect(JSON.stringify(result)).not.toContain("sk-secret-material")
+})
+
+test("selection is synchronous and performs no network work", () => {
+  const result = resolveAutoModel({ task: "hii", providers, connected: ["cheap"] })
+  expect(!(result instanceof Promise)).toBe(true)
+})

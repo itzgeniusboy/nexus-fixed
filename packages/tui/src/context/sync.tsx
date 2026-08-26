@@ -16,6 +16,7 @@ import type {
   SessionStatus,
   ProviderListResponse,
   ProviderAuthMethod,
+  ProviderVaultKeys,
   VcsInfo,
   SnapshotFileDiff,
   ConsoleState,
@@ -32,6 +33,7 @@ import { batch, onMount } from "solid-js"
 import path from "path"
 import { useKV } from "./kv"
 import { usePermission } from "./permission"
+import { goneRoute, quarantineRoute } from "../util/auto-route-quarantine"
 
 const emptyConsoleState: ConsoleState = {
   consoleManagedProviders: [],
@@ -72,6 +74,7 @@ export const {
       provider: Provider[]
       provider_default: Record<string, string>
       provider_next: ProviderListResponse
+      provider_keys: ProviderVaultKeys["providers"]
       console_state: ConsoleState
       capabilities: {
         experimentalBackgroundSubagents: boolean
@@ -117,6 +120,7 @@ export const {
         default: {},
         connected: [],
       },
+      provider_keys: [],
       console_state: emptyConsoleState,
       capabilities: {
         experimentalBackgroundSubagents: false,
@@ -320,6 +324,8 @@ export const {
 
         case "message.updated": {
           touchMessage(event.properties.info.sessionID, event.properties.info.id)
+          const gone = event.properties.info.role === "assistant" ? goneRoute(event.properties.info) : undefined
+          if (gone) quarantineRoute(kv, gone.providerID, gone.modelID)
           const messages = store.message[event.properties.info.sessionID]
           if (!messages) {
             setStore("message", event.properties.info.sessionID, [event.properties.info])
@@ -531,6 +537,10 @@ export const {
               setStore("session_status", reconcile(x.data ?? {}))
             }),
             sdk.client.provider.auth({ workspace }).then((x) => setStore("provider_auth", reconcile(x.data ?? {}))),
+            sdk.client.providerVault.keys
+              .list()
+              .then((x) => setStore("provider_keys", reconcile(x.providers ?? [])))
+              .catch(() => {}),
             sdk.client.vcs.get({ workspace }).then((x) => setStore("vcs", reconcile(x.data))),
             project.workspace.sync(),
           ]).then(() => {
