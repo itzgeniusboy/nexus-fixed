@@ -1601,11 +1601,30 @@ test("public provider info omits invalid models", () => {
     id: ModelV2.ID.make("invalid"),
     cost: { ...provider.models.valid.cost, input: Number.NaN },
   }
+  provider.models.malformed = {
+    ...provider.models.valid,
+    id: ModelV2.ID.make("malformed"),
+    capabilities: { ...provider.models.valid.capabilities, input: undefined },
+  } as unknown as Model
 
   const result = Provider.toPublicInfo(provider)
 
   expect(result.models.valid).toBeDefined()
   expect(result.models.invalid).toBeUndefined()
+  expect(result.models.malformed).toBeUndefined()
+})
+
+test("public provider info tolerates a missing models record", () => {
+  const provider = {
+    id: ProviderV2.ID.make("test"),
+    name: "Test",
+    source: "custom",
+    env: [],
+    options: {},
+    models: undefined,
+  } as unknown as Provider.Info
+
+  expect(Provider.toPublicInfo(provider).models).toEqual({})
 })
 
 it.instance("model variants are generated for reasoning models", () =>
