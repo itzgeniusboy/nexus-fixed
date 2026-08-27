@@ -115,6 +115,19 @@ describe("MasterAgent", () => {
     expect(result.status).toBe("completed")
   })
 
+  test("strict verification blocks success without worker evidence", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root, requireWorkerVerification: true })
+    await agent.create("Verify the implementation")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+
+    const state = await agent.executeStep("test", async () => ({ summary: "tests probably passed" }))
+
+    expect(state.status).toBe("blocked")
+    expect(state.steps[0]?.status).toBe("blocked")
+    expect(state.error).toContain("verification evidence")
+  })
+
   test("blocks safely when a worker reports unavailable capability", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root })

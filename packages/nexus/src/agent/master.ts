@@ -92,6 +92,7 @@ export type MasterAgentOptions = {
   workspace: string
   statePath?: string
   maxStepAttempts?: number
+  requireWorkerVerification?: boolean
   hooks?: MasterHooks
 }
 
@@ -343,19 +344,27 @@ export class MasterAgent {
           queuedInstructions: [...task.queuedInstructions],
           capabilities: detectAgentCapabilities(),
         })
-        step.status = result.status === "blocked" ? "blocked" : "completed"
-        step.completedAt = result.status === "blocked" ? undefined : now()
-        step.result = result.summary
-        step.changedFiles = result.changedFiles ? [...result.changedFiles] : undefined
-        step.verification = result.verification ? [...result.verification] : undefined
-        step.next = result.next ? [...result.next] : undefined
+        const effectiveResult =
+          this.options.requireWorkerVerification && result.status !== "blocked" && !result.verification?.length
+            ? {
+                ...result,
+                status: "blocked" as const,
+                summary: "Worker did not provide verification evidence; step remains blocked.",
+              }
+            : result
+        step.status = effectiveResult.status === "blocked" ? "blocked" : "completed"
+        step.completedAt = effectiveResult.status === "blocked" ? undefined : now()
+        step.result = effectiveResult.summary
+        step.changedFiles = effectiveResult.changedFiles ? [...effectiveResult.changedFiles] : undefined
+        step.verification = effectiveResult.verification ? [...effectiveResult.verification] : undefined
+        step.next = effectiveResult.next ? [...effectiveResult.next] : undefined
         task.status =
-          result.status === "blocked"
+          effectiveResult.status === "blocked"
             ? "blocked"
             : task.steps.every((item) => item.status === "completed")
               ? "completed"
               : "dispatching"
-        if (result.status === "blocked") task.error = result.summary
+        if (effectiveResult.status === "blocked") task.error = effectiveResult.summary
         task.activeStepID = undefined
         task.retryCount = 0
         task.updatedAt = now()
@@ -364,9 +373,9 @@ export class MasterAgent {
             taskID: task.id,
             stepID: step.id,
             worker: step.kind,
-            phase: result.status === "blocked" ? "blocked" : "completed",
+            phase: effectiveResult.status === "blocked" ? "blocked" : "completed",
             attempt: step.attempts,
-            summary: result.summary,
+            summary: effectiveResult.summary,
           },
           this.snapshot(),
         )
