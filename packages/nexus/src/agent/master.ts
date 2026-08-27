@@ -342,13 +342,17 @@ export class MasterAgent {
         await this.checkpoint()
         return this.snapshot()
       } catch (error) {
-        step.error = safeError(error)
+        const message = safeError(error)
+        const repeatedError = step.error === message
+        step.error = message
         task.retryCount += 1
         task.updatedAt = now()
-        if (step.attempts >= maxAttempts) {
+        if (repeatedError || step.attempts >= maxAttempts) {
           step.status = "failed"
           task.status = "failed"
-          task.error = `Step ${step.id} failed after ${step.attempts} attempts: ${step.error}`
+          task.error = repeatedError
+            ? `Step ${step.id} stopped after the same error repeated: ${step.error}`
+            : `Step ${step.id} failed after ${step.attempts} attempts: ${step.error}`
           await this.checkpoint()
           return this.snapshot()
         }

@@ -115,6 +115,24 @@ describe("MasterAgent", () => {
     expect(Array.isArray(received)).toBe(true)
   })
 
+  test("stops repeated identical worker errors before exhausting retries", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root, maxStepAttempts: 5 })
+    await agent.create("Fix the repeated failure")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+
+    let attempts = 0
+    const state = await agent.executeStep("test", async () => {
+      attempts += 1
+      throw new Error("same deterministic failure")
+    })
+
+    expect(attempts).toBe(2)
+    expect(state.status).toBe("failed")
+    expect(state.error).toContain("same error repeated")
+    expect(state.steps[0]?.attempts).toBe(2)
+  })
+
   test("checkpoints a plan and retries a failed worker within a bounded budget", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root, maxStepAttempts: 2 })
