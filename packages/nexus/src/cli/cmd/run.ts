@@ -18,6 +18,7 @@ import path from "path"
 import { pathToFileURL } from "url"
 import { open } from "node:fs/promises"
 import { Effect } from "effect"
+import * as prompts from "@clack/prompts"
 import { UI } from "../ui"
 import { effectCmd } from "../effect-cmd"
 import { EOL } from "os"
@@ -27,6 +28,7 @@ import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { modelWarning } from "@/provider/rotation"
 import { isKnownModelAlias, routeModel } from "@/api/ModelRouter"
+import { findSafeBrowserHandoffUrl, openLocalBrowser } from "../../agent-platform/browser-handoff"
 
 type ModelInput = Parameters<NexusClient["session"]["prompt"]>[0]["model"]
 
@@ -841,6 +843,26 @@ export const RunCommand = effectCmd({
               if (!sessions.has(permission.sessionID)) continue
 
               if (auto) {
+                const browserUrl = findSafeBrowserHandoffUrl(permission.patterns)
+                if (browserUrl && process.stdin.isTTY && process.stdout.isTTY) {
+                  UI.println(
+                    UI.Style.TEXT_WARNING_BOLD + "Browser access needed" + UI.Style.TEXT_NORMAL,
+                    "NEXUS opened a safe page locally. Complete login/CAPTCHA/OTP yourself, then confirm to continue.",
+                  )
+                  try {
+                    await openLocalBrowser(browserUrl)
+                    const confirmed = await prompts.confirm({ message: "Browser step complete — continue this task?", initialValue: false })
+                    if (prompts.isCancel(confirmed) || confirmed !== true) {
+                      await client.permission.reply({ requestID: permission.id, reply: "reject" })
+                    } else {
+                      await client.permission.reply({ requestID: permission.id, reply: "once" })
+                    }
+                  } catch (error) {
+                    UI.error(error instanceof Error ? error.message : "Unable to open the browser handoff")
+                    await client.permission.reply({ requestID: permission.id, reply: "reject" })
+                  }
+                  continue
+                }
                 await client.permission.reply({
                   requestID: permission.id,
                   reply: "once",
