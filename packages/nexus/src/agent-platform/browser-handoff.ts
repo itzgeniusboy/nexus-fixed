@@ -23,6 +23,7 @@ export type BrowserPageInspectionOptions = {
   fetch?: typeof globalThis.fetch
   timeoutMs?: number
   maxPreviewChars?: number
+  signal?: AbortSignal
 }
 
 function isTermuxEnvironment() {
@@ -62,7 +63,7 @@ export async function inspectPublicBrowserPage(
     const response = await (options.fetch ?? globalThis.fetch)(target.launchUrl, {
       method: "GET",
       redirect: "manual",
-      signal: controller.signal,
+      signal: options.signal ?? controller.signal,
     })
     const contentType = response.headers.get("content-type") ?? ""
     const readable = /(?:text\/|application\/(?:json|xml|javascript))/i.test(contentType)

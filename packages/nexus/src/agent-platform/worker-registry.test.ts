@@ -18,6 +18,7 @@ function request(kind: WorkerRequest["step"]["kind"], workspace: string, objecti
       git: true,
       github: false,
       browserHandoff: true,
+      browserHttpInspection: false,
       browserAutomation: false,
       webRuntime: true,
       android: false,

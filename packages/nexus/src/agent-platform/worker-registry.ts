@@ -1,4 +1,5 @@
 import type { AgentCapabilities } from "./capabilities"
+import { inspectPublicBrowserPage } from "./browser-handoff"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
 import type { WorkerKind, WorkerRequest, WorkerResult } from "../agent/master"
 
@@ -153,15 +154,16 @@ function browserWorker(): MasterWorker {
           ],
         }
       }
-      if (!context.capabilities.browserAutomation || !context.operations.inspectBrowser) {
+      if (!context.capabilities.browserHttpInspection || !context.operations.inspectBrowser) {
         return {
           summary:
-            "Browser automation is unavailable; safe URL handoff remains the only browser action supported here.",
+            "Safe browser HTTP inspection is unavailable; URL handoff remains the only browser action supported here.",
           verification: ["No page was opened, logged into, uploaded to, or submitted."],
           next: ["Use the existing safe browser handoff or enable a supported local inspection adapter."],
         }
       }
       const result = await context.operations.inspectBrowser({ url, signal: request.signal })
+
       return {
         summary: result.summary,
         verification: [
@@ -175,6 +177,20 @@ function browserWorker(): MasterWorker {
 }
 
 export function createMasterWorkerRegistry(operations: MasterWorkerOperations = {}) {
+  const resolvedOperations: MasterWorkerOperations = {
+    ...operations,
+    inspectBrowser:
+      operations.inspectBrowser ??
+      (async ({ url, signal }) => {
+        const page = await inspectPublicBrowserPage(url, { signal })
+        return {
+          url: page.url,
+          status: page.status,
+          title: page.title,
+          summary: `Inspected public page (${page.status})${page.title ? `: ${page.title}` : ""}.`,
+        }
+      }),
+  }
   const workers: MasterWorker[] = [
     { kind: "research", run: async (_request, context) => workerUnavailable("research", context.capabilities) },
     { kind: "coder", run: async (_request, context) => workerUnavailable("coder", context.capabilities) },
@@ -193,7 +209,7 @@ export function createMasterWorkerRegistry(operations: MasterWorkerOperations = 
     run: async (request: WorkerRequest): Promise<WorkerResult> => {
       const worker = byKind.get(request.step.kind)
       if (!worker) throw new Error(`No Master worker registered for ${request.step.kind}`)
-      return worker.run(request, { capabilities: request.capabilities, operations })
+      return worker.run(request, { capabilities: request.capabilities, operations: resolvedOperations })
     },
   }
 }
