@@ -212,6 +212,19 @@ export class MasterAgent {
     }
   }
 
+  async run(objective: string, dispatcher: (request: WorkerRequest) => Promise<WorkerResult>): Promise<MasterTask> {
+    const existing = await this.resume()
+    if (!existing || ["completed", "failed", "cancelled"].includes(existing.status)) {
+      await this.create(objective)
+      await this.autoPlan()
+    } else {
+      if (objective.trim() && objective.trim() !== existing.objective.trim()) await this.enqueueInstruction(objective)
+      if (existing.steps.length === 0) await this.autoPlan()
+      await this.transition("dispatching")
+    }
+    return this.executePlan(dispatcher)
+  }
+
   async autoPlan(): Promise<MasterTask> {
     const task = this.requireTask()
     return this.plan(suggestMasterSteps(task.objective))

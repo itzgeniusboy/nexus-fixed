@@ -25,6 +25,21 @@ describe("MasterAgent", () => {
     expect(steps.at(-1)?.dependsOn).toEqual(["review"])
   })
 
+  test("run creates a plan and dispatches it through the typed worker callback", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root })
+    const dispatched: string[] = []
+
+    const result = await agent.run("Fix and test the project", async (request) => {
+      dispatched.push(request.step.kind)
+      return { summary: `${request.step.kind} completed` }
+    })
+
+    expect(dispatched).toEqual(["coder", "reviewer", "tester"])
+    expect(result.status).toBe("completed")
+    expect(result.steps.every((step) => step.status === "completed")).toBe(true)
+  })
+
   test("autoPlan persists the generated workflow", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root })
