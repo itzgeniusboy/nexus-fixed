@@ -29,6 +29,14 @@ function request(kind: WorkerRequest["step"]["kind"], workspace: string, objecti
 }
 
 describe("Master worker registry", () => {
+  test("runs the default fixed-argument Git inspection adapter", async () => {
+    const registry = createMasterWorkerRegistry()
+    const result = await registry.run(request("git", process.cwd()))
+
+    expect(result.summary).toMatch(/Git working tree is clean|changed file/)
+    expect(result.verification).toContain("Only read-only inspection was requested by this worker.")
+  })
+
   test("runs typed read-only Git inspection and reports approval boundary", async () => {
     const registry = createMasterWorkerRegistry({
       inspectGit: async () => ({ branch: "main", clean: true, changedFiles: [], summary: "Repository inspected" }),

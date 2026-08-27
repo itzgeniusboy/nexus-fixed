@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
@@ -44,7 +46,30 @@ export type MasterWorker = {
   run: (request: WorkerRequest, context: MasterWorkerContext) => Promise<WorkerResult>
 }
 
+const execFileAsync = promisify(execFile)
 const urlPattern = /https?:\/\/[^\s)\]}>,]+/i
+
+async function inspectGitReadOnly(input: { workspace: string; signal?: AbortSignal }): Promise<GitInspection> {
+  const result = await execFileAsync("git", ["-C", input.workspace, "status", "--short", "--branch"], {
+    maxBuffer: 512 * 1024,
+    timeout: 8_000,
+    signal: input.signal,
+    windowsHide: true,
+  })
+  const lines = result.stdout.split(/\r?\n/).filter((line) => line.length > 0)
+  const branch = lines[0]?.startsWith("## ") ? lines[0].slice(3).split("...")[0] : undefined
+  const changedFiles = lines
+    .slice(branch ? 1 : 0)
+    .map((line) => line.slice(3).trim())
+    .filter((line) => line.length > 0)
+  const clean = changedFiles.length === 0
+  return {
+    branch,
+    clean,
+    changedFiles,
+    summary: clean ? "Git working tree is clean." : `Git working tree has ${changedFiles.length} changed file(s).`,
+  }
+}
 
 function workerUnavailable(kind: WorkerKind, capabilities: AgentCapabilities): WorkerResult {
   const availability = [
@@ -179,6 +204,7 @@ function browserWorker(): MasterWorker {
 export function createMasterWorkerRegistry(operations: MasterWorkerOperations = {}) {
   const resolvedOperations: MasterWorkerOperations = {
     ...operations,
+    inspectGit: operations.inspectGit ?? inspectGitReadOnly,
     inspectBrowser:
       operations.inspectBrowser ??
       (async ({ url, signal }) => {
