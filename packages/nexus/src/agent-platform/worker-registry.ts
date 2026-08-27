@@ -205,8 +205,14 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
       const target = detectProjectTargets(request.workspace).find((item) => allow(item))
       if (!target) {
         return {
-          summary: `No ${kind} project target was detected in the workspace.`,
+          status: "blocked",
+          summary: `No ${kind} project target was detected in the workspace; no files or commands were changed.`,
           verification: ["Project detection completed without executing commands."],
+          next: [
+            kind === "android"
+              ? "Create or open an Android/Gradle project, then rerun the Master task after confirming the required SDK and Gradle tooling."
+              : "Create or open a Node/web project with its package manifest, then rerun the Master task after confirming the package manager.",
+          ],
         }
       }
 
