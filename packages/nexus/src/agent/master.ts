@@ -63,6 +63,7 @@ export type WorkerRequest = {
 }
 
 export type WorkerResult = {
+  status?: "completed" | "blocked"
   summary: string
   changedFiles?: string[]
   verification?: string[]
@@ -306,10 +307,16 @@ export class MasterAgent {
           queuedInstructions: [...task.queuedInstructions],
           capabilities: detectAgentCapabilities(),
         })
-        step.status = "completed"
-        step.completedAt = now()
+        step.status = result.status === "blocked" ? "blocked" : "completed"
+        step.completedAt = result.status === "blocked" ? undefined : now()
         step.result = result.summary
-        task.status = task.steps.every((item) => item.status === "completed") ? "completed" : "dispatching"
+        task.status =
+          result.status === "blocked"
+            ? "blocked"
+            : task.steps.every((item) => item.status === "completed")
+              ? "completed"
+              : "dispatching"
+        if (result.status === "blocked") task.error = result.summary
         task.activeStepID = undefined
         task.retryCount = 0
         task.updatedAt = now()

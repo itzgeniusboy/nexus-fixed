@@ -60,6 +60,23 @@ describe("MasterAgent", () => {
     expect(result.status).toBe("completed")
   })
 
+  test("blocks safely when a worker reports unavailable capability", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root })
+    await agent.create("Inspect an unsupported browser")
+    await agent.plan([{ id: "browser", kind: "browser", title: "Inspect page", dependsOn: [] }])
+
+    const state = await agent.executeStep("browser", async () => ({
+      status: "blocked" as const,
+      summary: "Browser inspection is unavailable on this device",
+    }))
+
+    expect(state.status).toBe("blocked")
+    expect(state.steps[0]?.status).toBe("blocked")
+    expect(state.steps[0]?.completedAt).toBeUndefined()
+    expect(state.error).toBe("Browser inspection is unavailable on this device")
+  })
+
   test("passes detected device capabilities to workers", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root })

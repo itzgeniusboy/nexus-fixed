@@ -189,6 +189,7 @@ function workerUnavailable(kind: WorkerKind, capabilities: AgentCapabilities): W
     capabilities.github ? "GitHub CLI" : undefined,
   ].filter((item): item is string => item !== undefined)
   return {
+    status: "blocked",
     summary: `${kind} worker is registered, but no execution adapter is available on this device.`,
     verification: availability.length
       ? [`Detected: ${availability.join(", ")}.`]
@@ -218,6 +219,7 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
       )
       if (!context.operations.runProjectChecks || commands.length === 0) {
         return {
+          status: "blocked",
           summary: `${kind} target detected; execution adapter is not enabled, so no commands were run.`,
           verification: [
             `Package manager: ${target.packageManager ?? "not applicable"}.`,
