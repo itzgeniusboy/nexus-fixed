@@ -15,6 +15,8 @@ const cfg = [
   "core.symlinks=true",
   "-c",
   "core.quotepath=false",
+  "-c",
+  "color.ui=false",
 ] as const
 
 const out = (result: { text(): string }) => result.text().trim()
