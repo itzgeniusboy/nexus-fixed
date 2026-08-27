@@ -20,6 +20,7 @@ import {
 } from "../../src/prompt/steering-queue"
 import { steerActiveTask, type SteeringDeps } from "../../src/util/steering-flow"
 import { STEERING_ACK, steeringStatusLine } from "../../src/util/steering"
+import { steeringQueueLabel } from "../../src/routes/session/index"
 
 /** Lets Solid's scheduler drain queued effects deterministically. */
 async function flush() {
@@ -118,6 +119,12 @@ function createSessionHarness(overrides: Partial<SteeringDeps> = {}) {
     canDispatchNow: () => steeringFlow.shouldDispatch(sessionID),
   }
 }
+
+test("pending steering uses a neutral label and never renders QUEUED", () => {
+  expect(steeringQueueLabel("followup")).toBe("pending:")
+  expect(steeringQueueLabel("next")).toBe("next:")
+  expect(steeringQueueLabel("followup")).not.toContain("queued")
+})
 
 test("new message during an active turn is acknowledged immediately, before abort settles", async () => {
   const h = createSessionHarness()

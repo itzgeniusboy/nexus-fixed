@@ -1410,6 +1410,11 @@ export function Session() {
   )
 }
 
+/** User-facing label for a prompt waiting behind the active task. */
+export function steeringQueueLabel(kind: PendingPrompt["kind"]) {
+  return kind === "next" ? "next:" : "pending:"
+}
+
 /** Visible, editable, removable list of messages waiting for the active task to finish. */
 function SteeringQueue(props: { sessionID: string; items: PendingPrompt[] }) {
   const { theme } = useTheme()
@@ -1428,7 +1433,7 @@ function SteeringQueue(props: { sessionID: string; items: PendingPrompt[] }) {
           {(item) => (
             <box flexDirection="row" gap={2}>
               <text fg={theme.textMuted} flexShrink={0}>
-                {item.kind === "next" ? "next:" : "queued:"}
+                {steeringQueueLabel(item.kind)}
               </text>
               <text fg={theme.text}>{queuePreview(item.input)}</text>
               <text fg={theme.textMuted} flexShrink={0} onMouseUp={() => editQueued(item)}>
