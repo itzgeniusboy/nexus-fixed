@@ -309,10 +309,7 @@ const writeText = Effect.fn("test.writeText")(function* (file: string, text: str
 })
 
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
-  yield* writeText(
-    path.join(dir, "nexus.json"),
-    JSON.stringify({ $schema: "https://nexus.ai/config.json", ...config }),
-  )
+  yield* writeText(path.join(dir, "nexus.json"), JSON.stringify({ $schema: "https://nexus.ai/config.json", ...config }))
 })
 
 const useServerConfig = Effect.fn("test.useServerConfig")(function* (config: (url: string) => Partial<ConfigV1.Info>) {
@@ -536,6 +533,7 @@ it.instance("loop calls LLM and returns assistant message", () =>
     const sessions = yield* Session.Service
     const chat = yield* sessions.create({
       title: "Pinned",
+      model: { id: ref.modelID, providerID: ref.providerID },
       permission: [{ permission: "*", pattern: "*", action: "allow" }],
     })
     yield* prompt.prompt({
@@ -761,6 +759,7 @@ it.instance("static loop returns assistant text through local provider", () =>
     const sessions = yield* Session.Service
     const session = yield* sessions.create({
       title: "Prompt provider",
+      model: { id: ref.modelID, providerID: ref.providerID },
       permission: [{ permission: "*", pattern: "*", action: "allow" }],
     })
 
@@ -1716,6 +1715,7 @@ it.instance(
       const sessions = yield* Session.Service
       const chat = yield* sessions.create({
         title: "Pinned",
+        model: { id: ref.modelID, providerID: ref.providerID },
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
       yield* llm.text("after-shell")
