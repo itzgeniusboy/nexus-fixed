@@ -89,6 +89,27 @@ describe("Master worker registry", () => {
     expect(result.summary).toMatch(/unavailable/i)
   })
 
+  test("skips Android connected checks without a device", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nexus-registry-android-"))
+    await writeFile(
+      join(root, "build.gradle"),
+      "plugins { id 'com.android.application' version '8.0.0' apply false }\n",
+    )
+    let commands: readonly string[] = []
+    const registry = createMasterWorkerRegistry({
+      runProjectChecks: async (input) => {
+        commands = input.commands
+        return input.commands.map((command) => ({ command, exitCode: 0 }))
+      },
+    })
+    const result = await registry.run(
+      request("android", root, "run Android checks", { android: true, apkBuild: true, androidDevice: false }),
+    )
+
+    expect(commands).toEqual(["./gradlew test", "./gradlew assembleDebug", "./gradlew assembleRelease"])
+    expect(result.verification).toContain("Skipped without a connected Android device: ./gradlew connectedCheck")
+  })
+
   test("dispatches only detected project checks through the typed operation", async () => {
     const root = await mkdtemp(join(tmpdir(), "nexus-registry-web-"))
     await writeFile(
