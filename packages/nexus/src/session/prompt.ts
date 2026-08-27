@@ -8,6 +8,7 @@ import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
+import { MasterAgent } from "../agent/master"
 import { Provider } from "@/provider/provider"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
@@ -141,6 +142,36 @@ const layer = Layer.effect(
     const flags = yield* RuntimeFlags.Service
     const database = yield* Database.Service
     const { db } = database
+    const checkpointMasterTask = Effect.fn("SessionPrompt.checkpointMasterTask")(function* (input: PromptInput) {
+      if (input.agent !== "master") return
+      const ctx = yield* InstanceState.context
+      const objective = input.parts
+        .map((part) => (part.type === "text" ? part.text : ""))
+        .filter((text) => text.length > 0)
+        .join("\n")
+        .trim()
+      if (!objective) return
+
+      yield* Effect.promise(async () => {
+        const master = new MasterAgent({
+          workspace: ctx.worktree,
+          statePath: path.join(ctx.worktree, ".nexus", `master-session-${input.sessionID}.json`),
+          hooks: {
+            onStatus: (message) => {
+              void message
+            },
+          },
+        })
+        const existing = await master.resume()
+        if (existing && !["completed", "failed", "cancelled"].includes(existing.status)) {
+          await master.enqueueInstruction(objective)
+          return
+        }
+        await master.create(objective)
+        await master.autoPlan()
+      })
+    })
+
     const ops = Effect.fn("SessionPrompt.ops")(function* () {
       return {
         cancel: (sessionID: SessionID) => cancel(sessionID),
@@ -1056,6 +1087,7 @@ const layer = Layer.effect(
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
+      yield* checkpointMasterTask(input).pipe(Effect.ignore, Effect.forkIn(scope))
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
