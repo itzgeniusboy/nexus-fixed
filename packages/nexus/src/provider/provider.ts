@@ -1860,7 +1860,10 @@ const layer = Layer.effect(
               (providerID === ProviderV2.ID.openrouter && modelID === "openai/gpt-5-chat")
             )
               delete provider.models[modelID]
-            if (model.status === "alpha" && !runtimeFlags.enableExperimentalModels) delete provider.models[modelID]
+            // Keep provider-accessible alpha models discoverable. They are shown as
+            // experimental in the selector and Auto can still apply capability,
+            // credential, health, and quota eligibility checks before selecting one.
+            // Only deprecated models are removed from the active catalog.
             if (model.status === "deprecated") delete provider.models[modelID]
             if (
               (configProvider?.blacklist && configProvider.blacklist.includes(modelID)) ||

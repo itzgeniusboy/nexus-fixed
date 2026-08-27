@@ -46,10 +46,10 @@ export function resolveAutoModel(input: AutoModelInput): AutoModelChoice | undef
         configured(provider.id, input),
     )
   if (usable.length === 0) return undefined
-  const pick =
-    requirements.tools || requirements.vision || requirements.longContext || requirements.reasoning
-      ? [...usable].sort(byStrength)[0]
-      : [...usable].sort(byCost)[0]
+  // Enforce capabilities first, then choose the cheapest suitable route.
+  // Strong models are used only when the task requires a capability that a
+  // cheaper candidate does not provide.
+  const pick = [...usable].sort(byTaskFit)[0]
   return (
     pick && {
       providerID: pick.provider.id,
@@ -93,26 +93,20 @@ function supports(model: Model, requirements: Requirements) {
   return true
 }
 
-function byCost(left: { model: Model }, right: { model: Model }) {
-  return (
-    (left.model.cost?.input ?? 0) - (right.model.cost?.input ?? 0) ||
-    left.model.id.localeCompare(right.model.id)
-  )
-}
+function byTaskFit(
+  left: { provider: Provider; model: Model },
+  right: { provider: Provider; model: Model },
+) {
+  const cost = (left.model.cost?.input ?? 0) - (right.model.cost?.input ?? 0)
+  if (cost !== 0) return cost
 
-function byStrength(left: { model: Model }, right: { model: Model }) {
-  return (
-    strength(left.model) - strength(right.model) ||
-    (left.model.cost?.input ?? 0) - (right.model.cost?.input ?? 0)
-  )
-}
+  // When price is equal, prefer the smaller context window to reduce
+  // unnecessary memory and prompt overhead.
+  const context = left.model.limit.context - right.model.limit.context
+  if (context !== 0) return context
 
-function strength(model: Model) {
-  return (
-    (model.capabilities.reasoning ? 0 : 4) +
-    (model.capabilities.toolcall ? 0 : 2) +
-    Math.max(0, 8 - Math.log10(Math.max(model.limit.context, 1000)))
-  )
+  // Keep deterministic provider ordering as the final tie-breaker.
+  return providerPriority(left.provider.id) - providerPriority(right.provider.id) || left.model.id.localeCompare(right.model.id)
 }
 
 // With no credential state at all the legacy behavior applies so pure callers
