@@ -5,11 +5,15 @@ import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { useLocal } from "../../context/local"
 
 export function Footer() {
   const { theme } = useTheme()
   const sync = useSync()
   const route = useRoute()
+  const local = useLocal()
+  const agent = createMemo(() => local.agent.current()?.name ?? "")
+  const autoModel = createMemo(() => local.model.isAuto())
   const mcp = createMemo(() => Object.values(sync.data.mcp).filter((x) => x.status === "connected").length)
   const mcpError = createMemo(() => Object.values(sync.data.mcp).some((x) => x.status === "failed"))
   const lsp = createMemo(() => Object.keys(sync.data.lsp))
@@ -60,6 +64,12 @@ export function Footer() {
             </text>
           </Match>
           <Match when={connected()}>
+            <Show when={agent()}>
+              <text fg={agent() === "master" ? theme.primary : theme.textMuted}>
+                {agent()}
+                {autoModel() ? " · Auto" : ""}
+              </text>
+            </Show>
             <Show when={permissions().length > 0}>
               <text fg={theme.warning}>
                 <span style={{ fg: theme.warning }}>△</span> {permissions().length} Permission
