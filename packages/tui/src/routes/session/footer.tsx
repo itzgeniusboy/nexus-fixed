@@ -14,6 +14,7 @@ export function Footer() {
   const local = useLocal()
   const agent = createMemo(() => local.agent.current()?.name ?? "")
   const autoModel = createMemo(() => local.model.isAuto())
+  const model = createMemo(() => local.model.parsed())
   const mcp = createMemo(() => Object.values(sync.data.mcp).filter((x) => x.status === "connected").length)
   const mcpError = createMemo(() => Object.values(sync.data.mcp).some((x) => x.status === "failed"))
   const lsp = createMemo(() => Object.keys(sync.data.lsp))
@@ -68,6 +69,11 @@ export function Footer() {
               <text fg={agent() === "master" ? theme.primary : theme.textMuted}>
                 {agent()}
                 {autoModel() ? " · Auto" : ""}
+              </text>
+            </Show>
+            <Show when={model().provider !== "Connect a provider"}>
+              <text fg={theme.textMuted}>
+                {model().provider}/{model().model}
               </text>
             </Show>
             <Show when={permissions().length > 0}>
