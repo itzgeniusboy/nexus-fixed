@@ -24,6 +24,17 @@ export function parseBrowserHandoffTarget(input: string): BrowserHandoffTarget {
   return { launchUrl: parsed.toString(), origin: parsed.origin, hasSensitiveQuery: false }
 }
 
+export function findSafeBrowserHandoffUrl(patterns: readonly string[]) {
+  for (const pattern of patterns) {
+    try {
+      return parseBrowserHandoffTarget(pattern).launchUrl
+    } catch {
+      // Permission patterns can contain non-URL paths or sensitive URLs; skip them.
+    }
+  }
+  return undefined
+}
+
 export async function openLocalBrowser(url: string, options: { termuxOpener?: string } = {}) {
   if (isTermuxEnvironment()) {
     const child = Bun.spawn([options.termuxOpener ?? "termux-open-url", url], { stdout: "ignore", stderr: "pipe" })

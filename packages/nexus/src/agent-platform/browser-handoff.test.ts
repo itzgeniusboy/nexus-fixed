@@ -1,7 +1,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { openLocalBrowser, parseBrowserHandoffTarget } from "./browser-handoff"
+import { findSafeBrowserHandoffUrl, openLocalBrowser, parseBrowserHandoffTarget } from "./browser-handoff"
 
 describe("BrowserHandoff", () => {
   test("accepts HTTP(S) URLs and exposes only an audit-safe origin", () => {
@@ -15,6 +15,13 @@ describe("BrowserHandoff", () => {
     expect(() => parseBrowserHandoffTarget("https://console.example.test/project?token=private-value")).toThrow(
       "sensitive query parameters",
     )
+  })
+
+  test("extracts only a safe HTTP(S) permission pattern", () => {
+    expect(findSafeBrowserHandoffUrl(["/tmp/project", "https://portal.example.test/login"])).toBe(
+      "https://portal.example.test/login",
+    )
+    expect(findSafeBrowserHandoffUrl(["https://portal.example.test/login?token=private-value", "/tmp/project"])).toBeUndefined()
   })
 
   test("rejects non-web URL schemes", () => {
