@@ -25,6 +25,20 @@ describe("MasterAgent", () => {
     expect(steps.at(-1)?.dependsOn).toEqual(["review"])
   })
 
+  test("emits worker lifecycle events for live progress consumers", async () => {
+    const root = await workspace()
+    const events: string[] = []
+    const agent = new MasterAgent({
+      workspace: root,
+      hooks: { onWorker: (event) => events.push(`${event.stepID}:${event.phase}:${event.attempt}`) },
+    })
+    await agent.create("Fix and test the project")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+    await agent.executePlan(async () => ({ summary: "tests passed" }))
+
+    expect(events).toEqual(["test:started:1", "test:completed:1"])
+  })
+
   test("run creates a plan and dispatches it through the typed worker callback", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root })

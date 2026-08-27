@@ -73,9 +73,19 @@ export type WorkerResult = {
   next?: string[]
 }
 
+export type MasterWorkerEvent = {
+  taskID: string
+  stepID: string
+  worker: WorkerKind
+  phase: "started" | "completed" | "blocked" | "retrying" | "failed"
+  attempt: number
+  summary?: string
+}
+
 export type MasterHooks = {
   onStatus?: (message: string, task: MasterTask) => void
   onCheckpoint?: (task: MasterTask) => void
+  onWorker?: (event: MasterWorkerEvent, task: MasterTask) => void
 }
 
 export type MasterAgentOptions = {
@@ -315,6 +325,16 @@ export class MasterAgent {
     while (step.attempts < maxAttempts) {
       step.attempts += 1
       try {
+        this.options.hooks?.onWorker?.(
+          {
+            taskID: task.id,
+            stepID: step.id,
+            worker: step.kind,
+            phase: "started",
+            attempt: step.attempts,
+          },
+          this.snapshot(),
+        )
         const result = await worker({
           taskID: task.id,
           step: clone(step),
@@ -339,6 +359,17 @@ export class MasterAgent {
         task.activeStepID = undefined
         task.retryCount = 0
         task.updatedAt = now()
+        this.options.hooks?.onWorker?.(
+          {
+            taskID: task.id,
+            stepID: step.id,
+            worker: step.kind,
+            phase: result.status === "blocked" ? "blocked" : "completed",
+            attempt: step.attempts,
+            summary: result.summary,
+          },
+          this.snapshot(),
+        )
         await this.checkpoint()
         return this.snapshot()
       } catch (error) {
@@ -353,9 +384,31 @@ export class MasterAgent {
           task.error = repeatedError
             ? `Step ${step.id} stopped after the same error repeated: ${step.error}`
             : `Step ${step.id} failed after ${step.attempts} attempts: ${step.error}`
+          this.options.hooks?.onWorker?.(
+            {
+              taskID: task.id,
+              stepID: step.id,
+              worker: step.kind,
+              phase: "failed",
+              attempt: step.attempts,
+              summary: step.error,
+            },
+            this.snapshot(),
+          )
           await this.checkpoint()
           return this.snapshot()
         }
+        this.options.hooks?.onWorker?.(
+          {
+            taskID: task.id,
+            stepID: step.id,
+            worker: step.kind,
+            phase: "retrying",
+            attempt: step.attempts,
+            summary: step.error,
+          },
+          this.snapshot(),
+        )
         step.status = "retrying"
         task.status = "retrying"
         await this.checkpoint()
