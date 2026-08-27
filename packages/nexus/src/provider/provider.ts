@@ -1277,12 +1277,22 @@ export const ConfigProvidersResult = Schema.Struct({
 })
 export type ConfigProvidersResult = Types.DeepMutable<Schema.Schema.Type<typeof ConfigProvidersResult>>
 
+function isPublicModel(value: unknown): value is Model {
+  try {
+    return Schema.is(Model)(value)
+  } catch {
+    // A malformed remote catalog entry must not abort the entire provider list.
+    return false
+  }
+}
+
 export function toPublicInfo(provider: Info): Info {
+  const models = provider && typeof provider.models === "object" && provider.models !== null ? provider.models : {}
   return JSON.parse(
     JSON.stringify(
       {
         ...provider,
-        models: Object.fromEntries(Object.entries(provider.models).filter(([, model]) => Schema.is(Model)(model))),
+        models: Object.fromEntries(Object.entries(models).filter(([, model]) => isPublicModel(model))),
       },
       (_, value) => {
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) return undefined

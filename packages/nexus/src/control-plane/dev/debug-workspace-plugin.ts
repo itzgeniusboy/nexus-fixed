@@ -2,8 +2,10 @@ import type { Plugin } from "@nexus-ai/plugin"
 import { rename, writeFile } from "node:fs/promises"
 import { randomInt } from "node:crypto"
 import { setTimeout as sleep } from "node:timers/promises"
+import { runtimeTempDirectory } from "@nexus-ai/core/platform"
+import path from "node:path"
 
-const DEV_DATA_FILE = "/tmp/nexus-workspace-dev-data.json"
+const DEV_DATA_FILE = path.join(runtimeTempDirectory(), "nexus-workspace-dev-data.json")
 const DEV_DATA_TEMP_FILE = `${DEV_DATA_FILE}.tmp`
 
 async function waitForHealth(port: number) {
