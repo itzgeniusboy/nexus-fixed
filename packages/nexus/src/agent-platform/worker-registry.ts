@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
+import { join } from "node:path"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
@@ -48,6 +49,74 @@ export type MasterWorker = {
 
 const execFileAsync = promisify(execFile)
 const urlPattern = /https?:\/\/[^\s)\]}>,]+/i
+
+const allowedPackageScripts = new Set(["dev", "start", "test", "lint", "typecheck", "check", "build", "compile"])
+const allowedGradleTasks = new Set(["tasks", "test", "connectedCheck", "assembleDebug", "assembleRelease"])
+
+function projectCommand(command: string, workspace: string, target: ProjectTarget) {
+  const parts = command.trim().split(/\s+/)
+  const executable = parts[0]
+  if (!executable) return undefined
+
+  if (
+    target.kind === "android" &&
+    executable === "./gradlew" &&
+    parts.length === 2 &&
+    allowedGradleTasks.has(parts[1])
+  ) {
+    return { file: join(workspace, "gradlew"), args: [parts[1]] }
+  }
+
+  if (
+    target.kind !== "android" &&
+    target.packageManager &&
+    executable === target.packageManager &&
+    parts.length === 3 &&
+    parts[1] === "run" &&
+    allowedPackageScripts.has(parts[2])
+  ) {
+    return { file: executable, args: ["run", parts[2]] }
+  }
+
+  return undefined
+}
+
+async function runProjectChecksReadOnly(input: {
+  workspace: string
+  target: ProjectTarget
+  commands: readonly string[]
+  signal?: AbortSignal
+}): Promise<readonly ProjectCheckResult[]> {
+  const results: ProjectCheckResult[] = []
+  for (const command of input.commands) {
+    const parsed = projectCommand(command, input.workspace, input.target)
+    if (!parsed) {
+      results.push({ command, exitCode: 126, output: "Skipped: command is not in the worker allowlist." })
+      continue
+    }
+    try {
+      const result = await execFileAsync(parsed.file, parsed.args, {
+        cwd: input.workspace,
+        maxBuffer: 512 * 1024,
+        timeout: 120_000,
+        signal: input.signal,
+        windowsHide: true,
+      })
+      results.push({ command, exitCode: 0, output: `${result.stdout}${result.stderr}`.slice(-32_000) })
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      const stdout = typeof error === "object" && error !== null && "stdout" in error ? error.stdout : ""
+      const stderr = typeof error === "object" && error !== null && "stderr" in error ? error.stderr : ""
+      results.push({
+        command,
+        exitCode: typeof code === "number" ? code : 1,
+        output: `${String(stdout)}${String(stderr)}`.slice(-32_000),
+      })
+      break
+    }
+  }
+  return results
+}
 
 async function inspectGitReadOnly(input: { workspace: string; signal?: AbortSignal }): Promise<GitInspection> {
   const result = await execFileAsync("git", ["-C", input.workspace, "status", "--short", "--branch"], {
@@ -205,6 +274,7 @@ export function createMasterWorkerRegistry(operations: MasterWorkerOperations = 
   const resolvedOperations: MasterWorkerOperations = {
     ...operations,
     inspectGit: operations.inspectGit ?? inspectGitReadOnly,
+    runProjectChecks: operations.runProjectChecks ?? runProjectChecksReadOnly,
     inspectBrowser:
       operations.inspectBrowser ??
       (async ({ url, signal }) => {
