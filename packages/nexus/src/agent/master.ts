@@ -78,6 +78,38 @@ export type MasterAgentOptions = {
   hooks?: MasterHooks
 }
 
+export function suggestMasterSteps(objective: string): Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">> {
+  const normalized = objective.trim().toLowerCase()
+  const steps: Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">> = []
+  const add = (id: string, kind: WorkerKind, title: string, dependsOn: string[] = []) =>
+    steps.push({ id, kind, title, dependsOn })
+
+  if (/research|investigate|analy[sz]e|compare|find out|documentation|docs|reference/.test(normalized)) {
+    add("research", "research", "Research the task and constraints")
+  }
+  if (/browser|website|web page|login|click|scrape|crawl/.test(normalized)) {
+    add("browser", "browser", "Inspect or operate the browser task", steps.length ? [steps.at(-1)!.id] : [])
+  }
+  if (/web app|website|frontend|backend|api|server|deploy/.test(normalized)) {
+    add("web", "web", "Run and inspect the web application", steps.length ? [steps.at(-1)!.id] : [])
+  }
+  if (/android|apk|mobile|gradle|adb|termux/.test(normalized)) {
+    add("android", "android", "Build and test the Android target", steps.length ? [steps.at(-1)!.id] : [])
+  }
+  if (/git|github|commit|branch|pull request|\bpr\b|repository|repo/.test(normalized)) {
+    add("git", "git", "Review and prepare the Git/GitHub changes", steps.length ? [steps.at(-1)!.id] : [])
+  }
+  if (/fix|bug|debug|implement|build|refactor|edit|code|feature|change/.test(normalized) || steps.length === 0) {
+    add("coder", "coder", "Implement the required code changes", steps.length ? [steps.at(-1)!.id] : [])
+  }
+  add("review", "reviewer", "Review the diff and diagnose remaining risks", [steps.at(-1)!.id])
+  add("test", "tester", "Run focused verification and regression tests", [steps.at(-1)!.id])
+  if (/readme|documentation|docs|guide|release/.test(normalized)) {
+    add("docs", "docs", "Update project documentation", [steps.at(-1)!.id])
+  }
+  return steps
+}
+
 const ACTIVE_STATUSES = new Set<MasterTaskStatus>([
   "received",
   "acknowledged",
@@ -100,6 +132,21 @@ function clone<T>(value: T): T {
 
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null
+}
+
+function isMasterTask(value: unknown): value is MasterTask {
+  if (!isRecord(value)) return false
+  return (
+    value.version === 1 &&
+    typeof value.id === "string" &&
+    typeof value.objective === "string" &&
+    Array.isArray(value.steps) &&
+    Array.isArray(value.queuedInstructions)
+  )
 }
 
 export function isRiskyAction(input: string): boolean {
@@ -146,8 +193,8 @@ export class MasterAgent {
     const path = this.statePath()
     if (!existsSync(path)) return undefined
     try {
-      const parsed = JSON.parse(readFileSync(path, "utf8")) as MasterTask
-      if (parsed.version !== 1 || !parsed.id || !parsed.objective || !Array.isArray(parsed.steps)) return undefined
+      const parsed: unknown = JSON.parse(readFileSync(path, "utf8"))
+      if (!isMasterTask(parsed)) return undefined
       this.task = parsed
       if (ACTIVE_STATUSES.has(parsed.status)) {
         parsed.status = "paused"
@@ -159,6 +206,11 @@ export class MasterAgent {
     } catch {
       return undefined
     }
+  }
+
+  async autoPlan(): Promise<MasterTask> {
+    const task = this.requireTask()
+    return this.plan(suggestMasterSteps(task.objective))
   }
 
   async plan(steps: Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">>): Promise<MasterTask> {

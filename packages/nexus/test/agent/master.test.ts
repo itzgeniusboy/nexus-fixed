@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { MasterAgent, isRiskyAction } from "@/agent/master"
+import { MasterAgent, isRiskyAction, suggestMasterSteps } from "@/agent/master"
 
 const workspaces: string[] = []
 
@@ -16,6 +16,25 @@ async function workspace() {
 }
 
 describe("MasterAgent", () => {
+  test("suggests a coordinated specialist plan from the objective", () => {
+    const steps = suggestMasterSteps(
+      "Fix the web app, inspect it in the browser, test the APK, and prepare a GitHub PR",
+    )
+
+    expect(steps.map((step) => step.kind)).toEqual(["browser", "web", "android", "git", "coder", "reviewer", "tester"])
+    expect(steps.at(-1)?.dependsOn).toEqual(["review"])
+  })
+
+  test("autoPlan persists the generated workflow", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root })
+    await agent.create("Research and fix a browser web app")
+
+    const state = await agent.autoPlan()
+    expect(state.status).toBe("planning")
+    expect(state.steps.map((step) => step.id)).toEqual(["research", "browser", "web", "coder", "review", "test"])
+  })
+
   test("detects risky actions without exposing secrets", () => {
     expect(isRiskyAction("git push origin main")).toBe(true)
     expect(isRiskyAction("sudo apt install gradle")).toBe(true)
