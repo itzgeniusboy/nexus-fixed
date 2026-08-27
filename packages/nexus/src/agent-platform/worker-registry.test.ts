@@ -4,7 +4,12 @@ import { join } from "node:path"
 import type { WorkerRequest } from "../agent/master"
 import { createMasterWorkerRegistry } from "./worker-registry"
 
-function request(kind: WorkerRequest["step"]["kind"], workspace: string, objective = "inspect") {
+function request(
+  kind: WorkerRequest["step"]["kind"],
+  workspace: string,
+  objective = "inspect",
+  capabilityOverrides: Partial<WorkerRequest["capabilities"]> = {},
+) {
   return {
     taskID: "task-1",
     step: { id: kind, kind, title: objective, status: "dispatching", dependsOn: [], attempts: 1, maxAttempts: 2 },
@@ -25,6 +30,7 @@ function request(kind: WorkerRequest["step"]["kind"], workspace: string, objecti
       androidDevice: false,
       apkBuild: false,
       packageManagers: ["bun"],
+      ...capabilityOverrides,
     },
   } satisfies WorkerRequest
 }
@@ -36,6 +42,27 @@ describe("Master worker registry", () => {
 
     expect(result.summary).toMatch(/Git working tree is clean|changed file/)
     expect(result.verification).toContain("Only read-only inspection was requested by this worker.")
+  })
+
+  test("inspects GitHub metadata only when the capability is enabled", async () => {
+    let called = false
+    const registry = createMasterWorkerRegistry({
+      inspectGit: async () => ({ branch: "main", clean: true, changedFiles: [], summary: "Repository inspected" }),
+      inspectGitHub: async () => {
+        called = true
+        return {
+          repository: "itzgeniusboy/nexus-fixed",
+          defaultBranch: "main",
+          authenticated: true,
+          summary: "GitHub repository inspected: itzgeniusboy/nexus-fixed",
+        }
+      },
+    })
+    const result = await registry.run(request("git", process.cwd(), "inspect GitHub", { github: true }))
+
+    expect(called).toBe(true)
+    expect(result.verification).toContain("Repository: itzgeniusboy/nexus-fixed")
+    expect(result.next).toContain("GitHub CLI is detected; external mutations still require explicit approval.")
   })
 
   test("runs typed read-only Git inspection and reports approval boundary", async () => {
