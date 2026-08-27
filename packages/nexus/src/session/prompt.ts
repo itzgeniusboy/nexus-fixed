@@ -8,8 +8,10 @@ import { MessageV2 } from "./message-v2"
 import { SessionRevert } from "./revert"
 import { Session } from "./session"
 import { Agent } from "../agent/agent"
-import { MasterAgent } from "../agent/master"
+import { MasterAgent, type MasterTask, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
+import { createMasterWorkerRegistry } from "../agent-platform/worker-registry"
 import { Provider } from "@/provider/provider"
+import { TuiEvent } from "@/server/tui-event"
 
 import { type Tool as AITool, tool, jsonSchema } from "ai"
 import type { JSONSchema7 } from "@ai-sdk/provider"
@@ -44,6 +46,7 @@ import { Image } from "@/image/image"
 import { decodeDataUrl } from "@/util/data-url"
 import { Process } from "@/util/process"
 import { Cause, Effect, Exit, Latch, Layer, Option, Scope, Context, Schema, Types } from "effect"
+import { EffectBridge } from "@/effect/bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { TaskTool, type TaskPromptOps } from "@/tool/task"
 import { SessionRunState } from "./run-state"
@@ -71,6 +74,52 @@ const SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES = new Set([
   "image/png",
   "image/webp",
 ])
+
+const MASTER_ACTION_PATTERN =
+  /\b(fix|bug|debug|implement|build|create|make|refactor|edit|code|feature|change|test|run|inspect|analy[sz]e|research|project|app|apk|android|browser|website|web app|backend|frontend|api|server|git|github|repo|repository)\b/i
+const MASTER_SPECIALIST_AGENTS: Partial<Record<WorkerKind, string>> = {
+  research: "explore",
+  coder: "coder",
+  reviewer: "reviewer",
+  tester: "tester",
+  docs: "general",
+}
+
+function masterObjectiveText(input: PromptInput) {
+  return input.parts
+    .map((part) => (part.type === "text" ? part.text : ""))
+    .filter((text) => text.length > 0)
+    .join("\n")
+    .trim()
+}
+
+function isAutonomousMasterObjective(objective: string) {
+  return MASTER_ACTION_PATTERN.test(objective)
+}
+
+function truncateMasterStatus(value: string, max = 260) {
+  const redacted = value.replace(/(api[_ -]?key|token|password|cookie)=?[^\s,;]+/gi, "$1=[redacted]")
+  return redacted.length > max ? `${redacted.slice(0, max - 1)}…` : redacted
+}
+
+function formatMasterTaskResult(task: MasterTask) {
+  const completed = task.steps.filter((step) => step.status === "completed").length
+  const blocked = task.steps.filter((step) => step.status === "blocked").length
+  const failed = task.steps.filter((step) => step.status === "failed").length
+  const lines = [
+    `Master Agent ${task.status}: ${completed}/${task.steps.length} steps completed.`,
+    ...(blocked ? [`${blocked} step(s) blocked pending capability, permission, or verification.`] : []),
+    ...(failed ? [`${failed} step(s) failed after bounded recovery.`] : []),
+  ]
+  for (const step of task.steps) {
+    lines.push(`- ${step.kind}: ${step.status}${step.result ? ` — ${truncateMasterStatus(step.result, 220)}` : ""}`)
+    if (step.verification?.length)
+      lines.push(`  Verification: ${step.verification.map(truncateMasterStatus).join("; ")}`)
+    if (step.changedFiles?.length) lines.push(`  Changed files: ${step.changedFiles.join(", ")}`)
+  }
+  if (task.error) lines.push(`Master note: ${truncateMasterStatus(task.error)}`)
+  return lines.join("\n")
+}
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -178,6 +227,163 @@ const layer = Layer.effect(
         resolvePromptParts: (template: string) => resolvePromptParts(template),
         prompt: (input: PromptInput) => prompt(input).pipe(Effect.catch(Effect.die)),
       } satisfies TaskPromptOps
+    })
+
+    const dispatchMasterTask = Effect.fn("SessionPrompt.dispatchMasterTask")(function* (input: {
+      input: PromptInput
+      message: SessionV1.WithParts
+    }) {
+      const ctx = yield* InstanceState.context
+      const workspace = ctx.worktree === path.parse(ctx.worktree).root ? ctx.directory : ctx.worktree
+      const promptOps = yield* ops()
+      const bridge = yield* EffectBridge.make()
+      const { task: taskTool } = yield* registry.named()
+      const registryWorkers = createMasterWorkerRegistry()
+      const masterAgent = yield* agents.get("master")
+      const user = input.message.info
+      if (user.role !== "user") return input.message
+
+      const assistantMessage: SessionV1.Assistant = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: user.id,
+        sessionID: input.input.sessionID,
+        mode: "master",
+        agent: "master",
+        variant: user.model.variant,
+        path: { cwd: ctx.directory, root: ctx.worktree },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: user.model.modelID,
+        providerID: user.model.providerID,
+        time: { created: Date.now() },
+      })
+      const abort = new AbortController()
+      const toast = (message: string, variant: "info" | "success" | "warning" | "error" = "info") => {
+        void bridge
+          .promise(
+            events.publish(TuiEvent.ToastShow, {
+              title: "Master Agent",
+              message: truncateMasterStatus(message),
+              variant,
+              duration: 4500,
+            }),
+          )
+          .catch(() => {})
+      }
+
+      const master = new MasterAgent({
+        workspace,
+        statePath: path.join(workspace, ".nexus", `master-session-${input.input.sessionID}.json`),
+        requireWorkerVerification: true,
+        signal: abort.signal,
+        hooks: {
+          onStatus: (message) => toast(message),
+          onWorker: (event) => {
+            const phase = event.phase === "completed" ? "success" : event.phase === "failed" ? "error" : "info"
+            toast(`${event.worker} ${event.phase}${event.summary ? `: ${event.summary}` : ""}`, phase)
+          },
+        },
+      })
+
+      const dispatch = async (request: WorkerRequest): Promise<WorkerResult> => {
+        const specialist = MASTER_SPECIALIST_AGENTS[request.step.kind]
+        if (!specialist) return registryWorkers.run(request)
+        const prompt = [
+          "You are a specialist worker delegated by the NEXUS Master Agent.",
+          `Objective: ${request.objective}`,
+          `Assigned step: ${request.step.title}`,
+          `Workspace: ${request.workspace}`,
+          request.queuedInstructions.length
+            ? `Queued user instructions:\n${request.queuedInstructions.join("\n")}`
+            : "No additional queued instructions.",
+          "Work only inside the assigned workspace and use the existing tools and permissions.",
+          "Do not delegate to another Master Agent. Do not claim success without concrete verification.",
+          "Return a concise report containing summary, changed files (if any), verification commands/results, and next steps.",
+        ].join("\\n\\n")
+        const result = await bridge.promise(
+          taskTool.execute(
+            {
+              description: `Master ${request.step.kind}: ${request.step.title}`.slice(0, 120),
+              prompt,
+              subagent_type: specialist,
+            },
+            {
+              sessionID: input.input.sessionID,
+              messageID: assistantMessage.id,
+              agent: "master",
+              abort: request.signal ?? abort.signal,
+              callID: `master_${request.step.id}_${request.step.attempts}`,
+              extra: { bypassAgentCheck: true, promptOps },
+              messages: [input.message],
+              metadata: () => Effect.void,
+              ask: (req) =>
+                permission.ask({
+                  ...req,
+                  sessionID: input.input.sessionID,
+                  ruleset: Permission.merge(masterAgent?.permission ?? [], session.permission ?? []),
+                }),
+            },
+          ),
+        )
+        const output = result.output.trim()
+        if (!output) {
+          return {
+            status: "blocked",
+            summary: `Specialist ${specialist} returned no completion report.`,
+            verification: ["TaskTool completed without a report; no success was claimed."],
+            next: ["Resume the checkpoint after the specialist returns a concrete verification report."],
+          }
+        }
+        const changedFiles = output
+          .split(/\r?\n/)
+          .find((line) => /^changed files?:/i.test(line))
+          ?.replace(/^changed files?:\s*/i, "")
+          .split(/[,\s]+/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+        return {
+          summary: output.length > 4000 ? `${output.slice(0, 3999)}…` : output,
+          changedFiles: changedFiles?.length ? changedFiles : undefined,
+          verification: [
+            `TaskTool specialist ${specialist} returned a completion report.`,
+            `Report: ${output.length > 1200 ? `${output.slice(0, 1199)}…` : output}`,
+          ],
+        }
+      }
+
+      const exit = yield* Effect.exit(
+        Effect.promise(() => master.run(masterObjectiveText(input.input), dispatch)).pipe(
+          Effect.onInterrupt(() => Effect.sync(() => abort.abort())),
+        ),
+      )
+      if (Exit.isSuccess(exit)) {
+        const task = exit.value
+        const text = formatMasterTaskResult(task)
+        assistantMessage.finish = "stop"
+        assistantMessage.time.completed = Date.now()
+        yield* sessions.updateMessage(assistantMessage)
+        const part: SessionV1.TextPart = {
+          id: PartID.ascending(),
+          messageID: assistantMessage.id,
+          sessionID: input.input.sessionID,
+          type: "text",
+          text,
+        }
+        yield* sessions.updatePart(part)
+        toast(`Master ${task.status}.`, task.status === "completed" ? "success" : "warning")
+        return { info: assistantMessage, parts: [part] }
+      }
+
+      abort.abort()
+      const error = Cause.squash(exit.cause)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      assistantMessage.finish = "stop"
+      assistantMessage.error = new NamedError.Unknown({ message: truncateMasterStatus(errorMessage) }).toObject()
+      assistantMessage.time.completed = Date.now()
+      yield* sessions.updateMessage(assistantMessage)
+      toast(`Master task failed: ${errorMessage}`, "error")
+      return { info: assistantMessage, parts: [] }
     })
 
     const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
@@ -1087,7 +1293,6 @@ const layer = Layer.effect(
       yield* revert.cleanup(session)
       const message = yield* createUserMessage(input)
       yield* sessions.touch(input.sessionID)
-      yield* checkpointMasterTask(input).pipe(Effect.ignore, Effect.forkIn(scope))
 
       const permissions: PermissionV1.Rule[] = []
       for (const [t, enabled] of Object.entries(input.tools ?? {})) {
@@ -1098,6 +1303,11 @@ const layer = Layer.effect(
         yield* sessions.setPermission({ sessionID: session.id, permission: permissions })
       }
 
+      const objective = masterObjectiveText(input)
+      if (input.agent === "master" && input.noReply !== true && isAutonomousMasterObjective(objective)) {
+        return yield* dispatchMasterTask({ input, message })
+      }
+      yield* checkpointMasterTask(input).pipe(Effect.ignore, Effect.forkIn(scope))
       if (input.noReply === true) return message
       return yield* loop({ sessionID: input.sessionID })
     })

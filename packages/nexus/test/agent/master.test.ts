@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { MasterAgent, isRiskyAction, suggestMasterSteps } from "@/agent/master"
+import { createVerificationReceipt, MasterAgent, isRiskyAction, suggestMasterSteps } from "@/agent/master"
 
 const workspaces: string[] = []
 
@@ -113,6 +113,20 @@ describe("MasterAgent", () => {
 
     expect(order).toEqual(["inspect", "verify"])
     expect(result.status).toBe("completed")
+  })
+
+  test("verification receipts are hashed and satisfy strict evidence requirements", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root, requireWorkerVerification: true })
+    await agent.create("Verify the implementation")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+
+    const receipt = createVerificationReceipt({ command: "bun test", exitCode: 0, output: "all tests passed" })
+    const state = await agent.executeStep("test", async () => ({ summary: "verified", receipts: [receipt] }))
+
+    expect(receipt.outputHash).toMatch(/^[a-f0-9]{64}$/)
+    expect(state.status).toBe("completed")
+    expect(state.steps[0]?.receipts).toEqual([receipt])
   })
 
   test("strict verification blocks success without worker evidence", async () => {

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs"
 import { mkdir, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
-import { randomUUID } from "node:crypto"
+import { createHash, randomUUID } from "node:crypto"
 import type { AgentCapabilities } from "../agent-platform/capabilities"
 import { detectAgentCapabilities } from "../agent-platform/capabilities"
 
@@ -24,6 +24,13 @@ export type WorkerKind = "research" | "coder" | "reviewer" | "tester" | "git" | 
 
 export type MasterStepStatus = Exclude<MasterTaskStatus, "received" | "acknowledged" | "planning" | "paused">
 
+export type VerificationReceipt = {
+  command: string
+  exitCode: number
+  outputHash?: string
+  capturedAt: string
+}
+
 export type MasterStep = {
   id: string
   kind: WorkerKind
@@ -38,6 +45,7 @@ export type MasterStep = {
   result?: string
   changedFiles?: string[]
   verification?: string[]
+  receipts?: VerificationReceipt[]
   next?: string[]
 }
 
@@ -70,6 +78,7 @@ export type WorkerResult = {
   summary: string
   changedFiles?: string[]
   verification?: string[]
+  receipts?: VerificationReceipt[]
   next?: string[]
 }
 
@@ -80,6 +89,20 @@ export type MasterWorkerEvent = {
   phase: "started" | "completed" | "blocked" | "retrying" | "failed"
   attempt: number
   summary?: string
+}
+
+export function createVerificationReceipt(input: {
+  command: string
+  exitCode: number
+  output?: string
+  capturedAt?: string
+}): VerificationReceipt {
+  return {
+    command: input.command,
+    exitCode: input.exitCode,
+    ...(input.output ? { outputHash: createHash("sha256").update(input.output).digest("hex") } : {}),
+    capturedAt: input.capturedAt ?? new Date().toISOString(),
+  }
 }
 
 export type MasterHooks = {
@@ -93,6 +116,7 @@ export type MasterAgentOptions = {
   statePath?: string
   maxStepAttempts?: number
   requireWorkerVerification?: boolean
+  signal?: AbortSignal
   hooks?: MasterHooks
 }
 
@@ -343,9 +367,13 @@ export class MasterAgent {
           workspace: this.options.workspace,
           queuedInstructions: [...task.queuedInstructions],
           capabilities: detectAgentCapabilities(),
+          signal: this.options.signal,
         })
         const effectiveResult =
-          this.options.requireWorkerVerification && result.status !== "blocked" && !result.verification?.length
+          this.options.requireWorkerVerification &&
+          result.status !== "blocked" &&
+          !result.verification?.length &&
+          !result.receipts?.length
             ? {
                 ...result,
                 status: "blocked" as const,
@@ -357,6 +385,7 @@ export class MasterAgent {
         step.result = effectiveResult.summary
         step.changedFiles = effectiveResult.changedFiles ? [...effectiveResult.changedFiles] : undefined
         step.verification = effectiveResult.verification ? [...effectiveResult.verification] : undefined
+        step.receipts = effectiveResult.receipts ? structuredClone(effectiveResult.receipts) : undefined
         step.next = effectiveResult.next ? [...effectiveResult.next] : undefined
         task.status =
           effectiveResult.status === "blocked"

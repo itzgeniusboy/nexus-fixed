@@ -4,7 +4,7 @@ import { join } from "node:path"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
-import type { WorkerKind, WorkerRequest, WorkerResult } from "../agent/master"
+import { createVerificationReceipt, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
 
 export type ProjectCheckResult = {
   command: string
@@ -242,16 +242,20 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
       })
       const failed = results.filter((result) => result.exitCode !== 0)
       return {
+        status: failed.length === 0 ? "completed" : "blocked",
         summary:
           failed.length === 0
             ? `${kind} checks completed successfully.`
-            : `${kind} checks completed with ${failed.length} failure(s).`,
+            : `${kind} checks completed with ${failed.length} failure(s); repair is required before success can be claimed.`,
         verification: [
           ...results.map((result) => `${result.exitCode === 0 ? "PASS" : "FAIL"}: ${result.command}`),
           ...(skippedConnectedChecks.length
             ? [`Skipped without a connected Android device: ${skippedConnectedChecks.join(", ")}`]
             : []),
         ],
+        receipts: results.map((result) =>
+          createVerificationReceipt({ command: result.command, exitCode: result.exitCode, output: result.output }),
+        ),
         next: failed.length
           ? ["Review the bounded command output and repair the first failing check before retrying."]
           : undefined,
@@ -291,6 +295,9 @@ function gitWorker(): MasterWorker {
           ...(github?.repository ? [`Repository: ${github.repository}`] : []),
           ...(github?.defaultBranch ? [`Default branch: ${github.defaultBranch}`] : []),
         ],
+        receipts: [
+          createVerificationReceipt({ command: "git status --short --branch", exitCode: 0, output: result.summary }),
+        ],
         next: context.capabilities.github
           ? ["GitHub CLI is detected; external mutations still require explicit approval."]
           : undefined,
@@ -323,12 +330,23 @@ function browserWorker(): MasterWorker {
       const result = await context.operations.inspectBrowser({ url, signal: request.signal })
 
       return {
+        status: result.status !== undefined && result.status >= 400 ? "blocked" : "completed",
         summary: result.summary,
         verification: [
           `Inspected URL: ${result.url}`,
           ...(result.status === undefined ? [] : [`HTTP status: ${result.status}`]),
           ...(result.title ? [`Title: ${result.title}`] : []),
         ],
+        receipts: [
+          createVerificationReceipt({
+            command: `GET ${result.url}`,
+            exitCode: result.status ?? 0,
+            output: result.summary,
+          }),
+        ],
+        ...(result.status !== undefined && result.status >= 400
+          ? { next: ["Review the HTTP failure before treating the browser step as complete."] }
+          : {}),
       }
     },
   }
