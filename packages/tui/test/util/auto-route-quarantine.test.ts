@@ -90,6 +90,24 @@ test("classifies quota responses and respects retry-after seconds", () => {
   expect(result).toEqual({ providerID: "google", modelID: "gemini-3.6-flash", cooldownMs: 42_000 })
 })
 
+test("quota cooldown accepts fractional retry-after values", () => {
+  const result = quotaRoute(
+    assistantMessage({
+      providerID: "google",
+      modelID: "gemini-3.6-flash",
+      error: {
+        name: "APIError",
+        data: {
+          message: "You exceeded your current quota. Please retry in 42.5 seconds.",
+          statusCode: 429,
+          isRetryable: true,
+        },
+      },
+    }),
+  )
+  expect(result?.cooldownMs).toBe(42_500)
+})
+
 test("quota cooldown is scoped to the exact provider/model route", () => {
   const kv = memoryKV()
   cooldownRoute(kv, "google", "gemini-3.6-flash", 42_000, 1_000)
