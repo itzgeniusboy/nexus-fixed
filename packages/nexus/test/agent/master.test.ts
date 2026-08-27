@@ -41,6 +41,25 @@ describe("MasterAgent", () => {
     expect(isRiskyAction("read package.json and run tests")).toBe(false)
   })
 
+  test("executes a dependency-ordered plan through a typed dispatcher", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root })
+    await agent.create("Inspect and verify")
+    await agent.plan([
+      { id: "inspect", kind: "research", title: "Inspect", dependsOn: [] },
+      { id: "verify", kind: "tester", title: "Verify", dependsOn: ["inspect"] },
+    ])
+
+    const order: string[] = []
+    const result = await agent.executePlan(async (request) => {
+      order.push(request.step.id)
+      return { summary: `completed ${request.step.id}` }
+    })
+
+    expect(order).toEqual(["inspect", "verify"])
+    expect(result.status).toBe("completed")
+  })
+
   test("passes detected device capabilities to workers", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root })

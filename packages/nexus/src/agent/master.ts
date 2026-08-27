@@ -242,6 +242,38 @@ export class MasterAgent {
     return this.snapshot()
   }
 
+  async executePlan(dispatcher: (request: WorkerRequest) => Promise<WorkerResult>): Promise<MasterTask> {
+    const task = this.requireTask()
+    if (task.steps.length === 0) {
+      task.status = "blocked"
+      task.error = "Cannot execute a Master plan with no steps"
+      await this.checkpoint()
+      return this.snapshot()
+    }
+
+    while (true) {
+      const next = task.steps.find(
+        (step) =>
+          step.status !== "completed" &&
+          step.status !== "failed" &&
+          step.dependsOn.every(
+            (dependency) => task.steps.find((item) => item.id === dependency)?.status === "completed",
+          ),
+      )
+      if (!next) {
+        if (task.steps.some((step) => step.status === "failed")) return this.snapshot()
+        if (task.steps.every((step) => step.status === "completed")) return this.snapshot()
+        task.status = "blocked"
+        task.error = "No executable Master step remains; dependencies may be cyclic or invalid"
+        await this.checkpoint()
+        return this.snapshot()
+      }
+
+      const result = await this.executeStep(next.id, dispatcher)
+      if (result.status === "failed" || result.status === "blocked") return result
+    }
+  }
+
   async executeStep(stepID: string, worker: (request: WorkerRequest) => Promise<WorkerResult>): Promise<MasterTask> {
     const task = this.requireTask()
     const step = task.steps.find((item) => item.id === stepID)
