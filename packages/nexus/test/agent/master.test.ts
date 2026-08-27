@@ -39,6 +39,24 @@ describe("MasterAgent", () => {
     expect(events).toEqual(["test:started:1", "test:completed:1"])
   })
 
+  test("emits retrying and failed events for a terminal worker error", async () => {
+    const root = await workspace()
+    const events: string[] = []
+    const agent = new MasterAgent({
+      workspace: root,
+      maxStepAttempts: 3,
+      hooks: { onWorker: (event) => events.push(`${event.phase}:${event.attempt}`) },
+    })
+    await agent.create("Fix a failing test")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+    const state = await agent.executeStep("test", async () => {
+      throw new Error("permanent failure")
+    })
+
+    expect(events).toEqual(["started:1", "retrying:1", "started:2", "failed:2"])
+    expect(state.status).toBe("failed")
+  })
+
   test("run creates a plan and dispatches it through the typed worker callback", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root })
