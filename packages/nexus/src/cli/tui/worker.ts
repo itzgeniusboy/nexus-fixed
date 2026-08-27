@@ -10,12 +10,30 @@ import { Heap } from "@/cli/heap"
 import { AppRuntime } from "@/effect/app-runtime"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { Global } from "@nexus-ai/core/global"
+import { appendFileSync, mkdirSync } from "node:fs"
+import path from "node:path"
 
 Heap.start()
 
-const onUnhandledRejection = (_error: unknown) => {}
+function recordFatalError(kind: "unhandledRejection" | "uncaughtException", error: unknown) {
+  const value = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+  // Keep diagnostics useful without writing likely credential material to disk.
+  const redacted = value
+    .replace(/(api[-_]?key|token|secret|authorization)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]")
+    .replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]")
+  const line = `${new Date().toISOString()} [${kind}] ${redacted.slice(0, 4000)}\n`
+  try {
+    mkdirSync(Global.Path.log, { recursive: true })
+    appendFileSync(path.join(Global.Path.log, "tui-errors.log"), line, { encoding: "utf8" })
+  } catch {
+    // Logging must never turn an already-failing worker into a second failure.
+  }
+}
 
-const onUncaughtException = (_error: Error) => {}
+const onUnhandledRejection = (error: unknown) => recordFatalError("unhandledRejection", error)
+
+const onUncaughtException = (error: unknown) => recordFatalError("uncaughtException", error)
 
 process.on("unhandledRejection", onUnhandledRejection)
 process.on("uncaughtException", onUncaughtException)

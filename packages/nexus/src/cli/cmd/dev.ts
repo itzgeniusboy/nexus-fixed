@@ -5,6 +5,7 @@ import { basename, join, resolve } from "node:path"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { cmd } from "./cmd"
+import { runtimeTempDirectory } from "@nexus-ai/core/platform"
 
 const execFileAsync = promisify(execFile)
 
@@ -107,7 +108,8 @@ const StatusCommand = cmd({
   describe: "show active hierarchy and liaison task status files",
   builder: (yargs: Argv) => yargs,
   async handler() {
-    const roots = [join("/tmp", "nexus", "teams"), join("/tmp", "nexus", "liaison")]
+    const tempRoot = runtimeTempDirectory()
+    const roots = [join(tempRoot, "nexus", "teams"), join(tempRoot, "nexus", "liaison")]
     let found = 0
     for (const root of roots) {
       try {
