@@ -32,10 +32,18 @@ describe("MasterAgent", () => {
 
     const result = await agent.run("Fix and test the project", async (request) => {
       dispatched.push(request.step.kind)
-      return { summary: `${request.step.kind} completed` }
+      return {
+        summary: `${request.step.kind} completed`,
+        changedFiles: [`${request.step.id}.ts`],
+        verification: [`${request.step.id} test passed`],
+        next: [`Review ${request.step.id}`],
+      }
     })
 
     expect(dispatched).toEqual(["coder", "reviewer", "tester"])
+    expect(result.steps[0]?.changedFiles).toEqual(["coder.ts"])
+    expect(result.steps[0]?.verification).toEqual(["coder test passed"])
+    expect(result.steps[0]?.next).toEqual(["Review coder"])
     expect(result.status).toBe("completed")
     expect(result.steps.every((step) => step.status === "completed")).toBe(true)
   })

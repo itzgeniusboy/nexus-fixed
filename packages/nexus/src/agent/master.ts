@@ -36,6 +36,9 @@ export type MasterStep = {
   completedAt?: string
   error?: string
   result?: string
+  changedFiles?: string[]
+  verification?: string[]
+  next?: string[]
 }
 
 export type MasterTask = {
@@ -323,6 +326,9 @@ export class MasterAgent {
         step.status = result.status === "blocked" ? "blocked" : "completed"
         step.completedAt = result.status === "blocked" ? undefined : now()
         step.result = result.summary
+        step.changedFiles = result.changedFiles ? [...result.changedFiles] : undefined
+        step.verification = result.verification ? [...result.verification] : undefined
+        step.next = result.next ? [...result.next] : undefined
         task.status =
           result.status === "blocked"
             ? "blocked"
