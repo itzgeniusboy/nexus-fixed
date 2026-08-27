@@ -19,6 +19,14 @@ export type GitInspection = {
   summary: string
 }
 
+export type GitHubInspection = {
+  repository?: string
+  defaultBranch?: string
+  url?: string
+  authenticated: boolean
+  summary: string
+}
+
 export type BrowserInspection = {
   url: string
   title?: string
@@ -28,6 +36,7 @@ export type BrowserInspection = {
 
 export type MasterWorkerOperations = {
   inspectGit?: (input: { workspace: string; signal?: AbortSignal }) => Promise<GitInspection>
+  inspectGitHub?: (input: { workspace: string; signal?: AbortSignal }) => Promise<GitHubInspection>
   inspectBrowser?: (input: { url: string; signal?: AbortSignal }) => Promise<BrowserInspection>
   runProjectChecks?: (input: {
     workspace: string
@@ -52,6 +61,10 @@ const urlPattern = /https?:\/\/[^\s)\]}>,]+/i
 
 const allowedPackageScripts = new Set(["dev", "start", "test", "lint", "typecheck", "check", "build", "compile"])
 const allowedGradleTasks = new Set(["tasks", "test", "connectedCheck", "assembleDebug", "assembleRelease"])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
 
 function projectCommand(command: string, workspace: string, target: ProjectTarget) {
   const parts = command.trim().split(/\s+/)
@@ -116,6 +129,34 @@ async function runProjectChecksReadOnly(input: {
     }
   }
   return results
+}
+
+async function inspectGitHubReadOnly(input: { workspace: string; signal?: AbortSignal }): Promise<GitHubInspection> {
+  try {
+    const result = await execFileAsync("gh", ["repo", "view", "--json", "nameWithOwner,defaultBranchRef,url"], {
+      cwd: input.workspace,
+      maxBuffer: 128 * 1024,
+      timeout: 8_000,
+      signal: input.signal,
+      windowsHide: true,
+    })
+    const parsed: unknown = JSON.parse(result.stdout)
+    if (!isRecord(parsed)) throw new Error("GitHub returned an invalid repository response")
+    const branch = isRecord(parsed.defaultBranchRef) ? parsed.defaultBranchRef.name : undefined
+    return {
+      repository: typeof parsed.nameWithOwner === "string" ? parsed.nameWithOwner : undefined,
+      defaultBranch: typeof branch === "string" ? branch : undefined,
+      url: typeof parsed.url === "string" ? parsed.url : undefined,
+      authenticated: true,
+      summary: `GitHub repository inspected${typeof parsed.nameWithOwner === "string" ? `: ${parsed.nameWithOwner}` : "."}`,
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return {
+      authenticated: false,
+      summary: `GitHub read-only inspection was unavailable: ${message.slice(0, 240)}`,
+    }
+  }
 }
 
 async function inspectGitReadOnly(input: { workspace: string; signal?: AbortSignal }): Promise<GitInspection> {
@@ -231,6 +272,10 @@ function gitWorker(): MasterWorker {
         }
       }
       const result = await context.operations.inspectGit({ workspace: request.workspace, signal: request.signal })
+      const github =
+        context.capabilities.github && context.operations.inspectGitHub
+          ? await context.operations.inspectGitHub({ workspace: request.workspace, signal: request.signal })
+          : undefined
       return {
         summary: result.summary,
         changedFiles: result.changedFiles,
@@ -240,6 +285,9 @@ function gitWorker(): MasterWorker {
             ? "Working-tree state: unavailable"
             : `Working tree: ${result.clean ? "clean" : "changed"}`,
           "Only read-only inspection was requested by this worker.",
+          ...(github ? [github.summary] : []),
+          ...(github?.repository ? [`Repository: ${github.repository}`] : []),
+          ...(github?.defaultBranch ? [`Default branch: ${github.defaultBranch}`] : []),
         ],
         next: context.capabilities.github
           ? ["GitHub CLI is detected; external mutations still require explicit approval."]
@@ -288,6 +336,7 @@ export function createMasterWorkerRegistry(operations: MasterWorkerOperations = 
   const resolvedOperations: MasterWorkerOperations = {
     ...operations,
     inspectGit: operations.inspectGit ?? inspectGitReadOnly,
+    inspectGitHub: operations.inspectGitHub ?? inspectGitHubReadOnly,
     runProjectChecks: operations.runProjectChecks ?? runProjectChecksReadOnly,
     inspectBrowser:
       operations.inspectBrowser ??
