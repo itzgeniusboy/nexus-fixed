@@ -61,6 +61,10 @@ export function quarantinedRoutes(kv: KV, now = Date.now()) {
   return [...new Set([...permanent, ...activeCooldowns(kv, now).map((item) => item.route)])]
 }
 
+export function coolingDownRoutes(kv: KV, now = Date.now()) {
+  return activeCooldowns(kv, now).map((item) => item.route)
+}
+
 export function quarantineRoute(kv: KV, providerID: string, modelID: string) {
   const key = routeKey(providerID, modelID)
   const value = kv.get(QUARANTINE_KEY)
