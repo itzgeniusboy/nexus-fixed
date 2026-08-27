@@ -1,7 +1,12 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { findSafeBrowserHandoffUrl, openLocalBrowser, parseBrowserHandoffTarget } from "./browser-handoff"
+import {
+  findSafeBrowserHandoffUrl,
+  inspectPublicBrowserPage,
+  openLocalBrowser,
+  parseBrowserHandoffTarget,
+} from "./browser-handoff"
 
 describe("BrowserHandoff", () => {
   test("accepts HTTP(S) URLs and exposes only an audit-safe origin", () => {
@@ -21,12 +26,43 @@ describe("BrowserHandoff", () => {
     expect(findSafeBrowserHandoffUrl(["/tmp/project", "https://portal.example.test/login"])).toBe(
       "https://portal.example.test/login",
     )
-    expect(findSafeBrowserHandoffUrl(["https://portal.example.test/login?token=private-value", "/tmp/project"])).toBeUndefined()
+    expect(
+      findSafeBrowserHandoffUrl(["https://portal.example.test/login?token=private-value", "/tmp/project"]),
+    ).toBeUndefined()
   })
 
   test("rejects non-web URL schemes", () => {
     expect(() => parseBrowserHandoffTarget("file:///private/data")).toThrow("http:// or https://")
     expect(() => parseBrowserHandoffTarget("javascript:alert(1)")).toThrow("http:// or https://")
+  })
+
+  test("inspects a public HTML page with bounded text evidence", async () => {
+    const result = await inspectPublicBrowserPage("https://example.test/page", {
+      maxPreviewChars: 100,
+      fetch: async () =>
+        new Response("<html><title>Example page</title><script>secret()</script><p>Hello browser worker</p></html>", {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        }),
+    })
+
+    expect(result.status).toBe(200)
+    expect(result.title).toBe("Example page")
+    expect(result.textPreview).toBe("Example page Hello browser worker")
+    expect(result.textPreview.length).toBeLessThanOrEqual(100)
+  })
+
+  test("refuses sensitive query parameters before performing a request", async () => {
+    let called = false
+    await expect(
+      inspectPublicBrowserPage("https://example.test/page?api_key=private", {
+        fetch: async () => {
+          called = true
+          return new Response("unexpected")
+        },
+      }),
+    ).rejects.toThrow("sensitive query parameters")
+    expect(called).toBe(false)
   })
 
   test("uses the local Termux opener with an origin-only URL", async () => {
