@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { WorkerRequest } from "../agent/master"
@@ -108,6 +108,24 @@ describe("Master worker registry", () => {
 
     expect(commands).toEqual(["./gradlew test", "./gradlew assembleDebug", "./gradlew assembleRelease"])
     expect(result.verification).toContain("Skipped without a connected Android device: ./gradlew connectedCheck")
+  })
+
+  test("surfaces generated Android artifacts after successful checks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nexus-registry-artifact-"))
+    await writeFile(
+      join(root, "build.gradle"),
+      "plugins { id 'com.android.application' version '8.0.0' apply false }\\n",
+    )
+    await mkdir(join(root, "build", "outputs", "apk"), { recursive: true })
+    await writeFile(join(root, "build", "outputs", "apk", "app-debug.apk"), "apk")
+    const registry = createMasterWorkerRegistry({
+      runProjectChecks: async (input) => input.commands.map((command) => ({ command, exitCode: 0 })),
+    })
+    const result = await registry.run(request("android", root, "run Android checks", { android: true, apkBuild: true }))
+
+    expect(result.status).toBe("completed")
+    expect(result.artifacts).toEqual(["build/outputs/apk/app-debug.apk"])
+    expect(result.verification).toContain("Artifact: build/outputs/apk/app-debug.apk")
   })
 
   test("blocks failed project checks and preserves nonzero receipts", async () => {

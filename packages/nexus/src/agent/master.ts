@@ -46,6 +46,7 @@ export type MasterStep = {
   changedFiles?: string[]
   verification?: string[]
   receipts?: VerificationReceipt[]
+  artifacts?: string[]
   next?: string[]
 }
 
@@ -79,6 +80,7 @@ export type WorkerResult = {
   changedFiles?: string[]
   verification?: string[]
   receipts?: VerificationReceipt[]
+  artifacts?: string[]
   next?: string[]
 }
 
@@ -386,6 +388,7 @@ export class MasterAgent {
         step.changedFiles = effectiveResult.changedFiles ? [...effectiveResult.changedFiles] : undefined
         step.verification = effectiveResult.verification ? [...effectiveResult.verification] : undefined
         step.receipts = effectiveResult.receipts ? structuredClone(effectiveResult.receipts) : undefined
+        step.artifacts = effectiveResult.artifacts ? [...effectiveResult.artifacts] : undefined
         step.next = effectiveResult.next ? [...effectiveResult.next] : undefined
         task.status =
           effectiveResult.status === "blocked"

@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process"
+import { readdir } from "node:fs/promises"
 import { promisify } from "node:util"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
@@ -92,6 +93,32 @@ function projectCommand(command: string, workspace: string, target: ProjectTarge
   }
 
   return undefined
+}
+
+async function findBuildArtifacts(root: string, signal?: AbortSignal): Promise<string[]> {
+  const artifacts: string[] = []
+  const roots = ["dist", "build/outputs/apk", "build/outputs/bundle", "out"]
+  const scan = async (directory: string, depth: number): Promise<void> => {
+    if (signal?.aborted || depth > 4 || artifacts.length >= 100) return
+    let entries: Awaited<ReturnType<typeof readdir>>
+    try {
+      entries = await readdir(directory, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (signal?.aborted || artifacts.length >= 100) return
+      const filepath = join(directory, entry.name)
+      if (entry.isDirectory()) {
+        await scan(filepath, depth + 1)
+        continue
+      }
+      if (!entry.isFile() || !/\.(apk|aab|js|css|html)$/i.test(entry.name)) continue
+      artifacts.push(relative(root, filepath))
+    }
+  }
+  for (const directory of roots) await scan(join(root, directory), 0)
+  return artifacts.sort()
 }
 
 async function runProjectChecksReadOnly(input: {
@@ -247,6 +274,7 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
         signal: request.signal,
       })
       const failed = results.filter((result) => result.exitCode !== 0)
+      const artifacts = failed.length === 0 ? await findBuildArtifacts(request.workspace, request.signal) : []
       return {
         status: failed.length === 0 ? "completed" : "blocked",
         summary:
@@ -255,6 +283,7 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
             : `${kind} checks completed with ${failed.length} failure(s); repair is required before success can be claimed.`,
         verification: [
           ...results.map((result) => `${result.exitCode === 0 ? "PASS" : "FAIL"}: ${result.command}`),
+          ...artifacts.map((artifact) => `Artifact: ${artifact}`),
           ...(skippedConnectedChecks.length
             ? [`Skipped without a connected Android device: ${skippedConnectedChecks.join(", ")}`]
             : []),
@@ -262,6 +291,7 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
         receipts: results.map((result) =>
           createVerificationReceipt({ command: result.command, exitCode: result.exitCode, output: result.output }),
         ),
+        artifacts: artifacts.length ? artifacts : undefined,
         next: failed.length
           ? ["Review the bounded command output and repair the first failing check before retrying."]
           : undefined,
