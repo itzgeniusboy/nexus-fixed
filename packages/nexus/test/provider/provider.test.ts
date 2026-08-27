@@ -20,7 +20,7 @@ import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Env } from "../../src/env"
 import { Plugin } from "../../src/plugin/index"
-import { Provider } from "@/provider/provider"
+import { Provider, defaultModelIDs } from "@/provider/provider"
 
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Filesystem } from "@/util/filesystem"
@@ -81,6 +81,15 @@ const providerLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   )
 
 const list = Provider.use.list()
+
+test("default model map skips providers whose catalog has no valid models", () => {
+  expect(
+    defaultModelIDs({
+      empty: { models: {} },
+      populated: { models: { first: { id: "first" } } },
+    }),
+  ).toEqual({ populated: "first" })
+})
 
 const paid = (providers: Record<string, { models: Record<string, { cost: { input: number } }> }>) => {
   const item = providers[ProviderV2.ID.make("nexus")]
