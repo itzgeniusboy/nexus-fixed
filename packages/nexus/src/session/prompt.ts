@@ -116,6 +116,9 @@ function formatMasterTaskResult(task: MasterTask) {
     if (step.verification?.length)
       lines.push(`  Verification: ${step.verification.map(truncateMasterStatus).join("; ")}`)
     if (step.changedFiles?.length) lines.push(`  Changed files: ${step.changedFiles.join(", ")}`)
+    if (step.artifacts?.length) lines.push(`  Artifacts: ${step.artifacts.join(", ")}`)
+    if (step.receipts?.length)
+      lines.push(`  Receipts: ${step.receipts.length} command result(s) hashed and checkpointed`)
   }
   if (task.error) lines.push(`Master note: ${truncateMasterStatus(task.error)}`)
   return lines.join("\n")
