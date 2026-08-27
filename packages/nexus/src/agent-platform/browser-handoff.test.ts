@@ -4,11 +4,17 @@ import { join } from "node:path"
 import { openLocalBrowser, parseBrowserHandoffTarget } from "./browser-handoff"
 
 describe("BrowserHandoff", () => {
-  test("accepts HTTP(S) URLs while exposing only an audit-safe origin", () => {
-    const target = parseBrowserHandoffTarget("https://console.example.test/project?token=private-value#fragment")
+  test("accepts HTTP(S) URLs and exposes only an audit-safe origin", () => {
+    const target = parseBrowserHandoffTarget("https://console.example.test/project#fragment")
     expect(target.origin).toBe("https://console.example.test")
-    expect(target.hasSensitiveQuery).toBe(true)
-    expect(target.launchUrl).toContain("private-value")
+    expect(target.hasSensitiveQuery).toBe(false)
+    expect(target.launchUrl).toBe("https://console.example.test/project#fragment")
+  })
+
+  test("rejects sensitive query parameters before launch", () => {
+    expect(() => parseBrowserHandoffTarget("https://console.example.test/project?token=private-value")).toThrow(
+      "sensitive query parameters",
+    )
   })
 
   test("rejects non-web URL schemes", () => {
@@ -16,7 +22,7 @@ describe("BrowserHandoff", () => {
     expect(() => parseBrowserHandoffTarget("javascript:alert(1)")).toThrow("http:// or https://")
   })
 
-  test("uses the local Termux opener without exposing its URL to stored handoff data", async () => {
+  test("uses the local Termux opener with an origin-only URL", async () => {
     const root = mkdtempSync(join(tmpdir(), "nexus-browser-handoff-"))
     const marker = join(root, "opened-url.txt")
     const opener = join(root, "termux-open-url")
@@ -26,8 +32,8 @@ describe("BrowserHandoff", () => {
     try {
       process.env.TERMUX_VERSION = "1"
       process.env.PATH = `${root}:${original.path ?? ""}`
-      await openLocalBrowser("https://portal.example.test/login?token=private-value", { termuxOpener: opener })
-      expect(readFileSync(marker, "utf8")).toContain("private-value")
+      await openLocalBrowser("https://portal.example.test/login", { termuxOpener: opener })
+      expect(readFileSync(marker, "utf8")).toBe("https://portal.example.test/login")
     } finally {
       if (original.termux === undefined) delete process.env.TERMUX_VERSION
       else process.env.TERMUX_VERSION = original.termux
