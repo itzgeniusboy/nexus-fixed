@@ -192,6 +192,24 @@ describe("MasterAgent", () => {
     expect(state.steps[0]?.attempts).toBe(2)
   })
 
+  test("checkpoints cancellation without retrying an aborted worker", async () => {
+    const root = await workspace()
+    const controller = new AbortController()
+    const agent = new MasterAgent({ workspace: root, signal: controller.signal, maxStepAttempts: 5 })
+    await agent.create("Cancel the task safely")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+
+    const state = await agent.executeStep("test", async () => {
+      controller.abort()
+      throw new Error("aborted")
+    })
+
+    expect(state.status).toBe("cancelled")
+    expect(state.steps[0]?.status).toBe("cancelled")
+    expect(state.steps[0]?.attempts).toBe(1)
+    expect(state.error).toBe("Worker cancelled by the caller")
+  })
+
   test("checkpoints a plan and retries a failed worker within a bounded budget", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root, maxStepAttempts: 2 })

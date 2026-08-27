@@ -306,6 +306,14 @@ export class MasterAgent {
     }
 
     while (true) {
+      if (this.options.signal?.aborted) {
+        task.status = "cancelled"
+        task.error = "Master task cancelled by the caller"
+        task.activeStepID = undefined
+        task.updatedAt = now()
+        await this.checkpoint()
+        return this.snapshot()
+      }
       const next = task.steps.find(
         (step) =>
           step.status !== "completed" &&
@@ -414,6 +422,16 @@ export class MasterAgent {
         await this.checkpoint()
         return this.snapshot()
       } catch (error) {
+        if (this.options.signal?.aborted) {
+          step.status = "cancelled"
+          step.error = "Worker cancelled by the caller"
+          task.status = "cancelled"
+          task.error = step.error
+          task.activeStepID = undefined
+          task.updatedAt = now()
+          await this.checkpoint()
+          return this.snapshot()
+        }
         const message = safeError(error)
         const repeatedError = step.error === message
         step.error = message
