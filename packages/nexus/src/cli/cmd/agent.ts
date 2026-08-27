@@ -608,7 +608,6 @@ const AgentBrowserCommand = cmd({
           throw error
         }
         process.stdout.write(`Opened ${handoff.origin} in your local browser. Handoff ${handoff.id} is awaiting you.${EOL}`)
-        if (target.hasSensitiveQuery) process.stdout.write(`Warning: the URL contains a sensitive-looking query parameter. It was opened locally but its value was not stored.${EOL}`)
         process.stdout.write(`Complete login, password/OTP/CAPTCHA, private data entry, declarations, payments, and final submission yourself in the browser. Then run: nexus agent browser resume ${handoff.id} --confirm${EOL}`)
         return
       }
