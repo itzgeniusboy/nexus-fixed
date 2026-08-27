@@ -2,6 +2,8 @@ import { existsSync, readFileSync } from "node:fs"
 import { mkdir, rename, writeFile } from "node:fs/promises"
 import { dirname, join } from "node:path"
 import { randomUUID } from "node:crypto"
+import type { AgentCapabilities } from "../agent-platform/capabilities"
+import { detectAgentCapabilities } from "../agent-platform/capabilities"
 
 export type MasterTaskStatus =
   | "received"
@@ -56,6 +58,7 @@ export type WorkerRequest = {
   objective: string
   workspace: string
   queuedInstructions: string[]
+  capabilities: AgentCapabilities
   signal?: AbortSignal
 }
 
@@ -269,6 +272,7 @@ export class MasterAgent {
           objective: task.objective,
           workspace: this.options.workspace,
           queuedInstructions: [...task.queuedInstructions],
+          capabilities: detectAgentCapabilities(),
         })
         step.status = "completed"
         step.completedAt = now()

@@ -41,6 +41,21 @@ describe("MasterAgent", () => {
     expect(isRiskyAction("read package.json and run tests")).toBe(false)
   })
 
+  test("passes detected device capabilities to workers", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root })
+    await agent.create("Inspect the browser")
+    await agent.plan([{ id: "browser", kind: "browser", title: "Inspect page", dependsOn: [] }])
+
+    let received: string[] = []
+    await agent.executeStep("browser", async (request) => {
+      received = request.capabilities.packageManagers
+      return { summary: "Capability check complete" }
+    })
+
+    expect(Array.isArray(received)).toBe(true)
+  })
+
   test("checkpoints a plan and retries a failed worker within a bounded budget", async () => {
     const root = await workspace()
     const agent = new MasterAgent({ workspace: root, maxStepAttempts: 2 })
