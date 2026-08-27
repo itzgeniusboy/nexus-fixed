@@ -350,6 +350,11 @@ describe("run runtime queue", () => {
     ui.submit("two")
     await Promise.resolve()
     expect(seen).toEqual(["one"])
+    expect(ui.commits.map((item) => item.text)).toEqual([
+      "Got it — queued; current task continues…",
+      "one",
+      "Got it — working on it…",
+    ])
 
     wake?.()
     await task
@@ -380,7 +385,11 @@ describe("run runtime queue", () => {
 
     expect(turns.map((item) => item.text)).toEqual(["one"])
     expect(turns[0]?.messageID).toEqual(expect.any(String))
-    expect(ui.commits.map((item) => item.text)).toEqual(["one", "Got it — working on it…"])
+    expect(ui.commits.map((item) => item.text)).toEqual([
+      "Got it — queued; current task continues…",
+      "one",
+      "Got it — working on it…",
+    ])
     const first = ui.events.find((item) => item.type === "queued.prompts")
     const event = ui.events.findLast((item) => item.type === "queued.prompts")
     expect(first?.type === "queued.prompts" ? first.prompts : []).toEqual([])

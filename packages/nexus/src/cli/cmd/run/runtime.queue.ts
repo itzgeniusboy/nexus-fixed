@@ -46,6 +46,10 @@ function acknowledgement(prompt: RunPrompt): string {
   return "Got it — working on it…"
 }
 
+function queuedAcknowledgement(): string {
+  return "Got it — queued; current task continues…"
+}
+
 function defer<T = void>(): Deferred<T> {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (error?: unknown) => void
@@ -307,6 +311,14 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
       state.queued = [...state.queued, queued]
       state.queue.push(prompt)
       syncQueue()
+      const ack = {
+        kind: "system",
+        text: queuedAcknowledgement(),
+        phase: "progress",
+        source: "system",
+      } as const
+      input.trace?.write("ui.commit", ack)
+      input.footer.append(ack)
       return
     }
 
