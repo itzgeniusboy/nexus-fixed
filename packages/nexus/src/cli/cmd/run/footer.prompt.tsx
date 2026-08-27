@@ -25,6 +25,7 @@ import {
 } from "./prompt.shared"
 import { NEXUS_BASE_MODE, useBindings } from "@nexus-ai/tui/keymap"
 import { realignEditorPromptParts, resolveEditorSlashValue } from "./prompt.editor"
+import { isPlainPromptSubmitKey } from "./prompt.submit"
 import { FOOTER_MENU_ROWS, createFooterMenuState, type RunFooterMenuItem } from "./footer.menu"
 import type { RunFooterTheme } from "./theme"
 import type { FooterState, RunAgent, RunCommand, RunPrompt, RunPromptPart, RunResource, RunTuiConfig } from "./types"
@@ -1155,7 +1156,16 @@ export function createPromptState(input: PromptInput): PromptState {
   }))
 
   const onKeyDown = (event: KeyEvent) => {
-    if (input.state().phase === "idle" && event.name.toLowerCase() === "escape") {
+    const name = event.name.toLowerCase()
+    if (isPlainPromptSubmitKey(event)) {
+      // Some Termux/OpenTUI combinations do not emit textarea.onSubmit for
+      // Return. Handle the key at the composer boundary as a reliable fallback.
+      event.preventDefault()
+      onSubmit()
+      return
+    }
+
+    if (input.state().phase === "idle" && name === "escape") {
       input.onInputClear()
     }
   }

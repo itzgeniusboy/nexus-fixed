@@ -48,6 +48,7 @@ it.instance("returns default native agents when no config", () =>
   Effect.gen(function* () {
     const agents = yield* load((svc) => svc.list())
     const names = agents.map((a) => a.name)
+    expect(names).toContain("master")
     expect(names).toContain("build")
     expect(names).toContain("plan")
     expect(names).toContain("general")
@@ -55,6 +56,18 @@ it.instance("returns default native agents when no config", () =>
     expect(names).toContain("compaction")
     expect(names).toContain("title")
     expect(names).toContain("summary")
+  }),
+)
+
+it.instance("master agent has correct autonomous defaults", () =>
+  Effect.gen(function* () {
+    const master = yield* load((svc) => svc.get("master"))
+    expect(master).toBeDefined()
+    expect(master?.mode).toBe("primary")
+    expect(master?.native).toBe(true)
+    expect(evalPerm(master, "edit")).toBe("allow")
+    expect(evalPerm(master, "bash")).toBe("allow")
+    expect(master?.prompt).toContain("Master Autonomous Agent")
   }),
 )
 
@@ -646,17 +659,17 @@ it.instance(
   },
 )
 
-it.instance("defaultAgent returns build when no default_agent config", () =>
+it.instance("defaultAgent returns master when no default_agent config", () =>
   Effect.gen(function* () {
     const agent = yield* load((svc) => svc.defaultAgent())
-    expect(agent).toBe("build")
+    expect(agent).toBe("master")
   }),
 )
 
-it.instance("defaultInfo returns resolved build agent when no default_agent config", () =>
+it.instance("defaultInfo returns resolved master agent when no default_agent config", () =>
   Effect.gen(function* () {
     const agent = yield* load((svc) => svc.defaultInfo())
-    expect(agent.name).toBe("build")
+    expect(agent.name).toBe("master")
     expect(agent.mode).toBe("primary")
   }),
 )
@@ -725,16 +738,17 @@ it.instance(
 )
 
 it.instance(
-  "defaultAgent returns plan when build is disabled and default_agent not set",
+  "defaultAgent returns plan when master and build are disabled and default_agent not set",
   () =>
     Effect.gen(function* () {
       const agent = yield* load((svc) => svc.defaultAgent())
-      // build is disabled, so it should return plan (next primary agent)
+      // master and build are disabled, so it should return plan (next primary agent)
       expect(agent).toBe("plan")
     }),
   {
     config: {
       agent: {
+        master: { disable: true },
         build: { disable: true },
       },
     },
@@ -747,6 +761,7 @@ it.instance(
   {
     config: {
       agent: {
+        master: { disable: true },
         build: { disable: true },
         plan: { disable: true },
       },

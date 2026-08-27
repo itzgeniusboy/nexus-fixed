@@ -40,6 +40,12 @@ type State = {
   closed: boolean
 }
 
+function acknowledgement(prompt: RunPrompt): string {
+  if (prompt.mode === "shell") return "Running command…"
+  if (prompt.command) return `Running /${prompt.command.name}…`
+  return "Got it — working on it…"
+}
+
 function defer<T = void>(): Deferred<T> {
   let resolve!: (value: T | PromiseLike<T>) => void
   let reject!: (error?: unknown) => void
@@ -203,6 +209,15 @@ export async function runPromptQueue(input: QueueInput): Promise<void> {
               input.trace?.write("ui.commit", commit)
               input.footer.append(commit)
             }
+
+            const ack = {
+              kind: "system",
+              text: acknowledgement(sent),
+              phase: "progress",
+              source: "system",
+            } as const
+            input.trace?.write("ui.commit", ack)
+            input.footer.append(ack)
             input.onSend?.(sent)
 
             if (state.closed) {

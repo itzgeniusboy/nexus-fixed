@@ -17,39 +17,39 @@ export class RotationEngine {
 
   next(providerID: string): string | undefined {
     if (!this.enabled) return undefined
-    const allValues = keyValues(this.keys, providerID).filter((value) => typeof value === "string" && value.trim().length > 0)
+    const allValues = keyValues(this.keys, providerID).filter(
+      (value) => typeof value === "string" && value.trim().length > 0,
+    )
     if (allValues.length === 0) return undefined
 
-    // Determine how many healthy keys exist to decide if we can afford to skip rate-limited ones
     const now = Date.now()
-    // First, filter out invalid/suspended completely
-    const eligibleValues = allValues.filter(val => {
-      const status = getCachedKeyStatus(val)
+    const eligibleValues = allValues.filter((value) => {
+      const status = getCachedKeyStatus(value)
       if (!status) return true
       if (status.status === "invalid") return false
-      if (status.status === "suspended" && status.suspendedUntil && Date.parse(status.suspendedUntil) > now) return false
+      if (status.status === "suspended") {
+        return Boolean(status.suspendedUntil && Date.parse(status.suspendedUntil) <= now)
+      }
+      if (status.cooldownUntil && Date.parse(status.cooldownUntil) > now) return false
       return true
     })
-    
+
     if (eligibleValues.length === 0) return undefined
-    
-    const healthyCount = eligibleValues.filter(val => {
-      const status = getCachedKeyStatus(val)
-      return !status || (status.status !== "rate_limited" && (!status.cooldownUntil || Date.parse(status.cooldownUntil) <= now))
-    }).length
+
+    const targetPool = eligibleValues.filter((value) => {
+      const status = getCachedKeyStatus(value)
+      return (
+        !status ||
+        status.status === "active" ||
+        status.status === "unknown" ||
+        status.status === "rate_limited" ||
+        status.status === "suspended"
+      )
+    })
 
     let position = this.positions.get(providerID) ?? 0
     let attempts = 0
-    let selectedValue: string | undefined = undefined
-
-    // Determine target pool: if healthyCount > 0, we only pick from healthy keys.
-    // If healthyCount === 0, we pick from all eligible (which means they are all rate_limited).
-    const targetPool = healthyCount > 0 
-      ? eligibleValues.filter(val => {
-          const status = getCachedKeyStatus(val)
-          return !status || status.status !== "rate_limited"
-        })
-      : eligibleValues
+    let selectedValue: string | undefined
 
     // A simpler approach: iterate over allValues starting from position, and pick the first one that is in targetPool.
     while (attempts < allValues.length) {
@@ -57,7 +57,7 @@ export class RotationEngine {
       const value = allValues[index]
       position++
       attempts++
-      
+
       if (targetPool.includes(value)) {
         selectedValue = value
         // Update the position in the map to the index *after* the one we just picked,
@@ -91,14 +91,17 @@ export class RotationEngine {
     return keyValues(this.keys, providerID).filter((value) => {
       if (typeof value !== "string" || value.trim().length === 0) return false
       const status = getCachedKeyStatus(value)
-      if (!status || status.status === "active" || status.status === "unknown" || status.status === "rate_limited") return true
-      return status.status === "suspended" && (!status.suspendedUntil || Date.parse(status.suspendedUntil) <= now)
+      if (!status || status.status === "active" || status.status === "unknown") return true
+      if (status.status === "rate_limited") return !status.cooldownUntil || Date.parse(status.cooldownUntil) <= now
+      return status.status === "suspended" && Boolean(status.suspendedUntil && Date.parse(status.suspendedUntil) <= now)
     }).length
   }
 
   static isRateLimited(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error)
-    return /rate.?limit|too many requests|quota exceeded|freeusagelimit|(?:status|http|error)?\s*[:(]?\s*429\b/i.test(message)
+    return /rate.?limit|too many requests|quota exceeded|freeusagelimit|(?:status|http|error)?\s*[:(]?\s*429\b/i.test(
+      message,
+    )
   }
 
   /** Provider failures that should advance to another configured engine. */
@@ -145,6 +148,7 @@ export const PREFERRED_MODELS = {
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   cerebras: ["llama3.3-70b", "llama3.1-8b"],
   opencode: ["grok-code-fast-1"],
+  openai: ["gpt-4o-mini", "gpt-4.1-mini"],
   anthropic: ["claude-sonnet-4-5", "claude-haiku-4-5", "claude-3-5-haiku-latest"],
   xai: ["grok-4", "grok-code-fast-1", "grok-3-mini"],
   mistral: ["mistral-large-latest", "mistral-small-latest"],
@@ -174,11 +178,18 @@ export function isTextGenerationCandidate(providerID: string, id: string, model:
   // These model families do not implement the text chat request used by
   // `nexus models test`. In particular, a broad /gemini/ fallback can select
   // Gemini TTS, image, or native-audio previews when the catalog is partial.
-  if (/(?:tts|native-audio|audio|image|video|embedding|embed|speech|lyria|music|deep-research|computer-use|robotics|banana)/i.test(lower)) {
+  if (
+    /(?:tts|native-audio|audio|image|video|embedding|embed|speech|lyria|music|deep-research|computer-use|robotics|banana)/i.test(
+      lower,
+    )
+  ) {
     return false
   }
   if (!model || typeof model !== "object") return true
-  const value = model as { capabilities?: { input?: { text?: boolean }; output?: { text?: boolean } }; modalities?: { input?: unknown[]; output?: unknown[] } }
+  const value = model as {
+    capabilities?: { input?: { text?: boolean }; output?: { text?: boolean } }
+    modalities?: { input?: unknown[]; output?: unknown[] }
+  }
   if (value.capabilities?.output?.text === false) return false
   if (Array.isArray(value.modalities?.output) && !value.modalities.output.includes("text")) return false
   if (value.capabilities?.input?.text === false) return false
@@ -264,6 +275,23 @@ export function redactSecret(value: string): string {
 
 export function providerFromEnvKey(key: string): string | undefined {
   return normalizeProviderKeyName(key)
+}
+
+export function isAgentCapableModel(model: unknown): boolean {
+  if (!model || typeof model !== "object") return true
+  const value = model as { status?: string; capabilities?: { toolcall?: boolean }; tool_call?: boolean }
+  if (value.status === "deprecated") return false
+  if (value.capabilities?.toolcall === false || value.tool_call === false) return false
+  return true
+}
+
+export function modelForAgent(providerID: string, models: Record<string, unknown>): string | undefined {
+  const candidates = Object.fromEntries(
+    Object.entries(models).filter(
+      ([id, model]) => isTextGenerationCandidate(providerID, id, model) && isAgentCapableModel(model),
+    ),
+  )
+  return modelForProvider(providerID, candidates) ?? modelForProvider(providerID, models)
 }
 
 export function modelForProvider(providerID: string, models: Record<string, unknown>): string | undefined {

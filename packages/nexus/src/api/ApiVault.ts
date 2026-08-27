@@ -204,6 +204,7 @@ export function saveApiVault(vault: ApiVaultData): void {
     // Termux filesystems may not implement chmod; the file is still private by default.
   }
   saveUsage(vault.usage)
+  invalidateCachedVaultStatus()
 }
 
 export function saveUsage(usage: Record<string, ProviderUsage>): void {

@@ -47,6 +47,16 @@ describe("API Vault Fast Route health evidence", () => {
     expect(row?.cooldownUntil).toBeDefined()
   })
 
+  test("accepts many keys for the same provider without an application cap", () => {
+    useTemporaryHome()
+    for (let index = 0; index < 25; index++) {
+      addApiKey("groq", `test-groq-key-${index}`, `key-${index}`)
+    }
+
+    expect(availableApiKeys("groq")).toHaveLength(25)
+    expect(apiVaultPublicRows().find((item) => item.provider === "groq")?.keys).toHaveLength(25)
+  })
+
   test("keeps only rounded latency evidence in public vault rows", () => {
     useTemporaryHome()
     const key = "test-groq-key-latency"

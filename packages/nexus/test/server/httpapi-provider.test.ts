@@ -398,4 +398,20 @@ describe("provider HttpApi", () => {
     }),
     { ...projectOptions, init: writeProviderModelsMutationPlugin },
   )
+
+  it.instance(
+    "keeps supported providers visible separately from connected providers",
+    Effect.gen(function* () {
+      const directory = (yield* TestInstance).directory
+      const response = yield* request("/provider", { headers: { "x-nexus-directory": directory } })
+      expect(response.status).toBe(200)
+      const body = yield* response.json
+      expect(providerByID(body, "all", "groq")).toBeDefined()
+      expect(providerByID(body, "all", "openai")).toBeDefined()
+      expect(providerByID(body, "all", "anthropic")).toBeDefined()
+      expect(isRecord(body) && Array.isArray(body.connected)).toBe(true)
+    }),
+    projectOptions,
+    30000,
+  )
 })

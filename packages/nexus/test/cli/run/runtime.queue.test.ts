@@ -145,6 +145,12 @@ describe("run runtime queue", () => {
         source: "system",
         messageID: expect.any(String),
       },
+      {
+        kind: "system",
+        text: "Got it — working on it…",
+        phase: "progress",
+        source: "system",
+      },
     ])
   })
 
@@ -164,7 +170,14 @@ describe("run runtime queue", () => {
     await task
 
     expect(seen).toEqual([{ text: "/exit", parts: [], mode: "shell" }])
-    expect(ui.commits).toEqual([])
+    expect(ui.commits).toEqual([
+      {
+        kind: "system",
+        text: "Running command…",
+        phase: "progress",
+        source: "system",
+      },
+    ])
   })
 
   test("shell mode submits /new instead of creating a session", async () => {
@@ -188,7 +201,14 @@ describe("run runtime queue", () => {
 
     expect(created).toBe(0)
     expect(seen).toEqual([{ text: "/new", parts: [], mode: "shell" }])
-    expect(ui.commits).toEqual([])
+    expect(ui.commits).toEqual([
+      {
+        kind: "system",
+        text: "Running command…",
+        phase: "progress",
+        source: "system",
+      },
+    ])
   })
 
   test("shell mode does not append a synthetic user row", async () => {
@@ -197,7 +217,14 @@ describe("run runtime queue", () => {
     const task = runPromptQueue({
       footer: ui.api,
       run: async () => {
-        expect(ui.commits).toEqual([])
+        expect(ui.commits).toEqual([
+          {
+            kind: "system",
+            text: "Running command…",
+            phase: "progress",
+            source: "system",
+          },
+        ])
         ui.api.close()
       },
     })
@@ -244,6 +271,12 @@ describe("run runtime queue", () => {
         source: "system",
         messageID: expect.any(String),
       },
+      {
+        kind: "system",
+        text: "Got it — working on it…",
+        phase: "progress",
+        source: "system",
+      },
     ])
   })
 
@@ -279,6 +312,12 @@ describe("run runtime queue", () => {
             phase: "start",
             source: "system",
             messageID: expect.any(String),
+          },
+          {
+            kind: "system",
+            text: "Got it — working on it…",
+            phase: "progress",
+            source: "system",
           },
         ])
         ui.api.close()
@@ -341,7 +380,7 @@ describe("run runtime queue", () => {
 
     expect(turns.map((item) => item.text)).toEqual(["one"])
     expect(turns[0]?.messageID).toEqual(expect.any(String))
-    expect(ui.commits.map((item) => item.text)).toEqual(["one"])
+    expect(ui.commits.map((item) => item.text)).toEqual(["one", "Got it — working on it…"])
     const first = ui.events.find((item) => item.type === "queued.prompts")
     const event = ui.events.findLast((item) => item.type === "queued.prompts")
     expect(first?.type === "queued.prompts" ? first.prompts : []).toEqual([])

@@ -102,11 +102,13 @@ describe("provider model selection", () => {
 })
 
 describe("offline provider catalog fallback", () => {
-  test("creates text-only local models only for configured providers", async () => {
+  test("creates a complete text-only catalog independent of configured providers", async () => {
     const { withLocalFallbackCatalog } = await import("@/provider/provider")
     const catalog = withLocalFallbackCatalog({}, { groq: ["test-key"] })
 
-    expect(Object.keys(catalog)).toEqual(["groq"])
+    expect(Object.keys(catalog)).toContain("groq")
+    expect(Object.keys(catalog)).toContain("openai")
+    expect(Object.keys(catalog)).toContain("anthropic")
     expect(catalog.groq.models["openai/gpt-oss-120b"].modalities).toEqual({ input: ["text"], output: ["text"] })
     expect(catalog.groq.models["llama-3.1-8b-instant"]).toBeUndefined()
   })
@@ -153,6 +155,13 @@ describe("vault-aware key rotation", () => {
     expect(rotation.next("groq")).toBe("key-two")
 
     updateApiKeyStatus("groq", "key-two", "rate_limited")
+    expect(rotation.next("groq")).toBeUndefined()
+
+    const vault = loadApiVault()
+    for (const entry of vault.providers.groq) {
+      entry.cooldownUntil = new Date(Date.now() - 1000).toISOString()
+    }
+    saveApiVault(vault)
     expect(rotation.next("groq")).toBe("key-one")
   })
 

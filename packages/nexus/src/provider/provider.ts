@@ -37,6 +37,8 @@ import {
   isDeprecatedFreeProvider,
   configuredProviderKeys,
   modelForProvider,
+  modelForAgent,
+  isTextGenerationCandidate,
   PREFERRED_MODELS,
 } from "./rotation"
 import {
@@ -48,6 +50,25 @@ import {
 } from "../api/ApiVault"
 import { PROVIDER_CONTRACTS, contractFor } from "../api/providers"
 
+function hasUsableProviderCredential(
+  provider: Pick<Info, "id" | "key" | "source">,
+  apiKeys: Record<string, string[]>,
+): boolean {
+  if (provider.id === "ollama" || provider.id === "opencode") return true
+  if (provider.source === "env" || provider.source === "api") return true
+  const keys = [...(provider.key ? [provider.key] : []), ...configuredProviderKeys(apiKeys, provider.id)]
+  if (keys.length === 0) return false
+  const now = Date.now()
+  return keys.some((key) => {
+    const status = getCachedKeyStatus(key)
+    if (!status) return true
+    if (status.status === "invalid") return false
+    if (status.status === "suspended" && status.suspendedUntil && Date.parse(status.suspendedUntil) > now) return false
+    if (status.cooldownUntil && Date.parse(status.cooldownUntil) > now) return false
+    return true
+  })
+}
+
 function mergeApiVaultKeys(configured: unknown): Record<string, string[]> {
   const result: Record<string, string[]> = {}
   if (configured && typeof configured === "object" && !Array.isArray(configured)) {
@@ -58,14 +79,18 @@ function mergeApiVaultKeys(configured: unknown): Record<string, string[]> {
           const status = getCachedKeyStatus(value)
           if (!status) return true
           if (status.status === "invalid") return false
-          if (status.status === "suspended" && status.suspendedUntil && Date.parse(status.suspendedUntil) > Date.now()) return false
+          if (status.status === "suspended" && status.suspendedUntil && Date.parse(status.suspendedUntil) > Date.now())
+            return false
           return true
         })
       }
     }
   }
   for (const { provider, entry } of apiVaultKeyEntries()) {
-    if (entry.status === "invalid" || (entry.status === "suspended" && entry.suspendedUntil && Date.parse(entry.suspendedUntil) > Date.now())) {
+    if (
+      entry.status === "invalid" ||
+      (entry.status === "suspended" && entry.suspendedUntil && Date.parse(entry.suspendedUntil) > Date.now())
+    ) {
       continue
     }
     const keys = result[provider] ?? []
@@ -121,12 +146,17 @@ export function withLocalFallbackCatalog(
   catalog: Record<string, ModelsDev.Provider>,
   apiKeys: Record<string, string[]>,
 ): Record<string, ModelsDev.Provider> {
+  // Keep the credential argument for callers that already pass vault state. The
+  // catalog is intentionally complete even when no provider is configured yet.
+  void apiKeys
   const result = { ...catalog }
   for (const [providerID, definition] of Object.entries(LOCAL_FALLBACK_PROVIDERS)) {
-    if (configuredProviderKeys(apiKeys, providerID).length === 0) continue
     const existing = result[providerID]
     const models = Object.fromEntries(
-      PREFERRED_MODELS[providerID as keyof typeof PREFERRED_MODELS].map((id) => [id, localFallbackModel(id, providerID)]),
+      PREFERRED_MODELS[providerID as keyof typeof PREFERRED_MODELS].map((id) => [
+        id,
+        localFallbackModel(id, providerID),
+      ]),
     )
     result[providerID] = {
       ...(existing ?? definition),
@@ -237,7 +267,10 @@ function apiBodySummary(init?: RequestInit) {
 
 async function debugApiResponse(response: Response, url: string) {
   if (!apiDebugEnabled()) return
-  const body = await response.clone().text().catch(() => "<unreadable response body>")
+  const body = await response
+    .clone()
+    .text()
+    .catch(() => "<unreadable response body>")
   console.error(`[NEXUS API] response status=${response.status} url=${url} body=${body.slice(0, 2000)}`)
 }
 
@@ -360,7 +393,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
         async getModel(sdk: any, modelID: string, _options?: Record<string, any>) {
           const chatOnly = /^(gpt-3|gpt-4-\d|gpt-4$|o1-mini)/.test(modelID)
           if (chatOnly && sdk.chat) return sdk.chat(modelID)
-          return sdk.responses ? sdk.responses(modelID) : sdk.chat?.(modelID) ?? sdk.languageModel(modelID)
+          return sdk.responses ? sdk.responses(modelID) : (sdk.chat?.(modelID) ?? sdk.languageModel(modelID))
         },
         options: { headerTimeout: OPENAI_HEADER_TIMEOUT_DEFAULT },
       }),
@@ -2061,8 +2094,10 @@ const layer = Layer.effect(
         const mod = await import(importSpec)
 
         const candidates = ["createOpenAICompatible", "languageModel", "create"]
-        const keyExport = Object.keys(mod).find(k => candidates.includes(k)) ?? Object.keys(mod).find(k => k.startsWith("create"))
-        if (!keyExport || typeof mod[keyExport] !== "function") throw new Error(`Package ${model.api.npm} exports no usable factory`)
+        const keyExport =
+          Object.keys(mod).find((k) => candidates.includes(k)) ?? Object.keys(mod).find((k) => k.startsWith("create"))
+        if (!keyExport || typeof mod[keyExport] !== "function")
+          throw new Error(`Package ${model.api.npm} exports no usable factory`)
         const fn = mod[keyExport]
         const loaded = fn({
           name: model.providerID,
@@ -2226,16 +2261,26 @@ const layer = Layer.effect(
       if (cfg.model) {
         const configured = parseModel(cfg.model)
         const provider = s.providers[configured.providerID]
-        const stale = /llama-3\.3-70b-versatile|gemini-3-pro-image-preview|gemini-[^/]*(?:tts|image)/i.test(configured.modelID)
+        const stale = /llama-3\.3-70b-versatile|gemini-3-pro-image-preview|gemini-[^/]*(?:tts|image)/i.test(
+          configured.modelID,
+        )
         if (provider && stale) {
           const preferred = modelForProvider(configured.providerID, provider.models)
           if (preferred) return { providerID: configured.providerID, modelID: preferred }
         }
-        if (provider && !isDeprecatedFreeProvider(provider.id)) return configured
-        // If the configured provider does not exist, fall through to recent/defaults.
+        const configuredInfo = provider?.models[configured.modelID]
+        if (
+          provider &&
+          configuredInfo &&
+          configuredInfo.status !== "deprecated" &&
+          isTextGenerationCandidate(provider.id, configured.modelID, configuredInfo) &&
+          hasUsableProviderCredential(provider, effectiveApiKeys) &&
+          !isDeprecatedFreeProvider(provider.id)
+        )
+          return configured
+        // If the configured provider/model is unavailable, fall through to recent/defaults.
       }
 
-      
       const recent = yield* fs.readJson(path.join(Global.Path.state, "model.json")).pipe(
         Effect.map((x): { providerID: ProviderV2.ID; modelID: ModelV2.ID }[] => {
           if (!isRecord(x) || !Array.isArray(x.recent)) return []
@@ -2260,19 +2305,11 @@ const layer = Layer.effect(
       const candidates = Object.values(s.providers)
         .filter((p) => configured.length === 0 || configured.includes(p.id) || p.id === "opencode")
         .filter((p) => !isDeprecatedFreeProvider(p.id))
-        .filter(
-          (p) =>
-            p.id === "ollama" ||
-            p.id === "opencode" ||
-            Boolean(p.key) ||
-            p.source === "env" ||
-            p.source === "api" ||
-            configuredProviderKeys(effectiveApiKeys, p.id).length > 0,
-        )
+        .filter((p) => hasUsableProviderCredential(p, effectiveApiKeys))
         .sort((a, b) => providerPriority(a.id) - providerPriority(b.id) || a.id.localeCompare(b.id))
       const provider = candidates[0]
       if (!provider) return yield* new NoProvidersError()
-      const preferred = modelForProvider(provider.id, provider.models)
+      const preferred = modelForAgent(provider.id, provider.models) ?? modelForProvider(provider.id, provider.models)
       if (preferred) {
         return {
           providerID: provider.id,
@@ -2295,7 +2332,10 @@ const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       return s.rotation.current(providerID)
     })
-    const invalidateLanguage = Effect.fn("Provider.invalidateLanguage")(function* (providerID: ProviderV2.ID, modelID: ModelV2.ID) {
+    const invalidateLanguage = Effect.fn("Provider.invalidateLanguage")(function* (
+      providerID: ProviderV2.ID,
+      modelID: ModelV2.ID,
+    ) {
       const s = yield* InstanceState.get(state)
       s.models.delete(`${providerID}/${modelID}`)
     })
@@ -2308,23 +2348,27 @@ const layer = Layer.effect(
         .filter((p) => p.id !== excludeProviderID)
         .filter((p) => !isDeprecatedFreeProvider(p.id))
         .filter((p) => configured.length === 0 || configured.includes(p.id) || p.id === "opencode")
-        .filter(
-          (p) =>
-            p.id === "ollama" ||
-            p.id === "opencode" ||
-            Boolean(p.key) ||
-            p.source === "env" ||
-            p.source === "api" ||
-            configuredProviderKeys(effectiveApiKeys, p.id).length > 0,
-        )
+        .filter((p) => hasUsableProviderCredential(p, effectiveApiKeys))
         .sort((a, b) => providerPriority(a.id) - providerPriority(b.id) || a.id.localeCompare(b.id))
         .flatMap((p) => {
-          const modelID = modelForProvider(p.id, p.models)
+          const modelID = modelForAgent(p.id, p.models) ?? modelForProvider(p.id, p.models)
           return modelID ? [{ providerID: p.id, modelID: ModelV2.ID.make(modelID) }] : []
         })
     })
 
-    return Service.of({ list, getProvider, getModel, getLanguage, closest, getSmallModel, defaultModel, fallbackModels, rotationKeyCount, currentKey, invalidateLanguage })
+    return Service.of({
+      list,
+      getProvider,
+      getModel,
+      getLanguage,
+      closest,
+      getSmallModel,
+      defaultModel,
+      fallbackModels,
+      rotationKeyCount,
+      currentKey,
+      invalidateLanguage,
+    })
   }),
 )
 
