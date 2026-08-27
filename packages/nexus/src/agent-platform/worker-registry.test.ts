@@ -110,6 +110,24 @@ describe("Master worker registry", () => {
     expect(result.verification).toContain("Skipped without a connected Android device: ./gradlew connectedCheck")
   })
 
+  test("blocks failed project checks and preserves nonzero receipts", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nexus-registry-web-failure-"))
+    await writeFile(
+      join(root, "package.json"),
+      JSON.stringify({ scripts: { test: "vitest" }, dependencies: { vite: "latest" } }),
+    )
+    const registry = createMasterWorkerRegistry({
+      runProjectChecks: async (input) =>
+        input.commands.map((command) => ({ command, exitCode: 1, output: "test failed" })),
+    })
+    const result = await registry.run(request("web", root, "run web checks"))
+
+    expect(result.status).toBe("blocked")
+    expect(result.summary).toMatch(/repair is required/i)
+    expect(result.receipts?.[0]?.exitCode).toBe(1)
+    expect(result.next?.[0]).toMatch(/repair/i)
+  })
+
   test("dispatches only detected project checks through the typed operation", async () => {
     const root = await mkdtemp(join(tmpdir(), "nexus-registry-web-"))
     await writeFile(
