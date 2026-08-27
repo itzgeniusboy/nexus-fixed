@@ -1,5 +1,13 @@
 import { expect, test } from "bun:test"
-import { goneRoute, quarantinedRoutes, quarantineRoute } from "../../src/util/auto-route-quarantine"
+import {
+  goneRoute,
+  quarantinedRoutes,
+  quarantineRoute,
+  quotaRoute,
+  cooldownRoute,
+  recordGoneRoute,
+  markAutoRoute,
+} from "../../src/util/auto-route-quarantine"
 import type { AssistantMessage } from "@nexus-ai/sdk/v2"
 
 function memoryKV(initial: Record<string, unknown> = {}) {
@@ -61,4 +69,67 @@ test("quarantine persists per route and never duplicates", () => {
 test("corrupted quarantine state degrades to an empty list without throwing", () => {
   expect(quarantinedRoutes(memoryKV({ auto_route_quarantine: "junk" }))).toEqual([])
   expect(quarantinedRoutes(memoryKV({ auto_route_quarantine: [1, "p/m", null] }))).toEqual(["p/m"])
+})
+
+test("classifies quota responses and respects retry-after seconds", () => {
+  const result = quotaRoute(
+    assistantMessage({
+      providerID: "google",
+      modelID: "gemini-3.6-flash",
+      error: {
+        name: "APIError",
+        data: {
+          message: "You exceeded your current quota",
+          statusCode: 429,
+          isRetryable: true,
+          responseHeaders: { "retry-after": "42" },
+        },
+      },
+    }),
+  )
+  expect(result).toEqual({ providerID: "google", modelID: "gemini-3.6-flash", cooldownMs: 42_000 })
+})
+
+test("quota cooldown accepts fractional retry-after values", () => {
+  const result = quotaRoute(
+    assistantMessage({
+      providerID: "google",
+      modelID: "gemini-3.6-flash",
+      error: {
+        name: "APIError",
+        data: {
+          message: "You exceeded your current quota. Please retry in 42.5 seconds.",
+          statusCode: 429,
+          isRetryable: true,
+        },
+      },
+    }),
+  )
+  expect(result?.cooldownMs).toBe(42_500)
+})
+
+test("quota cooldown is scoped to the exact provider/model route", () => {
+  const kv = memoryKV()
+  cooldownRoute(kv, "google", "gemini-3.6-flash", 42_000, 1_000)
+  expect(quarantinedRoutes(kv, 1_001)).toEqual(["google/gemini-3.6-flash"])
+  expect(quarantinedRoutes(kv, 43_001)).toEqual([])
+})
+
+test("Auto quota failure pauses the route once and suppresses repeated notifications", () => {
+  const kv = memoryKV()
+  const notices: string[] = []
+  markAutoRoute("s1", "google", "gemini-3.6-flash")
+  const message = assistantMessage({
+    providerID: "google",
+    modelID: "gemini-3.6-flash",
+    error: {
+      name: "APIError",
+      data: { message: "quota exceeded; retry in 30s", statusCode: 429, isRetryable: true },
+    },
+  })
+  const notify = (notice: { message: string }) => notices.push(notice.message)
+  expect(recordGoneRoute(message, { kv, notify })).toEqual({ quarantined: true })
+  expect(recordGoneRoute(message, { kv, notify })).toEqual({ quarantined: true })
+  expect(notices).toHaveLength(1)
+  expect(quarantinedRoutes(kv)).toEqual(["google/gemini-3.6-flash"])
 })

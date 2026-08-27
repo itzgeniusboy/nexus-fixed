@@ -86,6 +86,10 @@ export function retryable(error: Err, provider: string) {
   // context overflow errors should not be retried
   if (SessionV1.ContextOverflowError.isInstance(error)) return undefined
   if (SessionV1.APIError.isInstance(error)) {
+    // Exhausted provider quota is not a transient transport failure. The
+    // provider/model fallback layer must move to another eligible route rather
+    // than retrying the same exhausted route until the user sees a loop.
+    if (isQuotaExhausted(error)) return undefined
     const status = error.data.statusCode
     // 5xx errors are transient server failures and should always be retried,
     // even when the provider SDK doesn't explicitly mark them as retryable.
@@ -152,6 +156,17 @@ export function retryable(error: Err, provider: string) {
   if (lower.includes("exhausted") || lower.includes("unavailable")) return { message: "Provider is overloaded" }
   if (matchesRetryableMessage(message)) return { message }
   return undefined
+}
+
+function isQuotaExhausted(error: SessionV1.APIError) {
+  const message = error.data.message
+  const body = error.data.responseBody ?? ""
+  const combined = `${message}\n${body}`
+  return (
+    !/FreeUsageLimitError|GoUsageLimitError/i.test(combined) &&
+    (/(?:exceeded|exhausted|reached|insufficient).*(?:current )?(?:quota|free.?tier|usage limit)/i.test(combined) ||
+      /(?:quota|free.?tier|usage limit).*(?:exceeded|exhausted|reached)/i.test(combined))
+  )
 }
 
 function matchesRetryableMessage(value: unknown) {

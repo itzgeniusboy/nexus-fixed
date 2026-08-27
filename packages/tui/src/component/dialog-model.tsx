@@ -79,7 +79,12 @@ export function DialogModel(props: { providerID?: string }) {
               : undefined,
             category: connected() ? provider.name : undefined,
             disabled: provider.id === "nexus" && model.includes("-nano"),
-            footer: info.cost?.input === 0 && provider.id === "nexus" ? "Free" : undefined,
+            footer:
+              info.status === "alpha"
+                ? "Experimental"
+                : info.cost?.input === 0 && provider.id === "nexus"
+                  ? "Free"
+                  : undefined,
             onSelect() {
               onSelect(provider.id, model)
             },
@@ -122,8 +127,9 @@ export function DialogModel(props: { providerID?: string }) {
             {
               value: { providerID: "auto", modelID: "auto" },
               title: `Auto${local.model.isAuto() ? " (on)" : ""}`,
-              description: "NEXUS picks the best model per task automatically",
+              description: "Task-aware, token-saving routing with safe fallback",
               category: "Mode",
+              footer: local.model.isAuto() ? "Active · token-saving" : "Task-aware",
               onSelect: () => {
                 local.model.setAuto(true)
                 dialog.clear()

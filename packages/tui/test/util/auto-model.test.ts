@@ -58,6 +58,24 @@ test("plain chat picks the cheapest capable model", () => {
   expect(result?.reason).toBe("chat")
 })
 
+test("coding tasks prefer the cheapest tool-capable model over an unnecessarily stronger model", () => {
+  const cheapTools = provider("cheap-tools", {
+    fast: model({
+      id: "fast",
+      cost: { input: 0.00001, output: 0.00002, cache: { read: 0, write: 0 } },
+    }),
+  })
+  const expensiveReasoning = provider("expensive-reasoning", {
+    deep: model({
+      id: "deep",
+      cost: { input: 0.01, output: 0.02, cache: { read: 0, write: 0 } },
+      capabilities: { ...model({}).capabilities, reasoning: true },
+    }),
+  })
+  const result = resolveAutoModel({ task: "fix this code", providers: [expensiveReasoning, cheapTools] })
+  expect(result).toEqual({ providerID: "cheap-tools", modelID: "fast", reason: "tools" })
+})
+
 test("vision tasks only consider image-capable models", () => {
   const vision = provider("vision", {
     eyes: model({

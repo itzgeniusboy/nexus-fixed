@@ -233,11 +233,11 @@ it.instance(
 )
 
 it.instance(
-  "filters alpha provider models by default",
+  "keeps accessible alpha provider models discoverable by default",
   Effect.gen(function* () {
     const providers = yield* list
     expect(providers[ProviderV2.ID.make("custom-provider")].models["active-model"]).toBeDefined()
-    expect(providers[ProviderV2.ID.make("custom-provider")].models["alpha-model"]).toBeUndefined()
+    expect(providers[ProviderV2.ID.make("custom-provider")].models["alpha-model"]).toBeDefined()
   }),
   { config: alphaProviderConfig },
 )

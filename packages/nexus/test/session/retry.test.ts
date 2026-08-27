@@ -332,6 +332,19 @@ describe("session.retry.retryable", () => {
     expect(retryable).toEqual({ message: "Response decompression failed" })
   })
 
+  test("does not retry an external provider current-quota exhaustion", () => {
+    const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
+      new SessionV1.APIError({
+        message: "You exceeded your current quota. Please retry in 42 seconds.",
+        isRetryable: true,
+        statusCode: 429,
+        responseHeaders: { "retry-after": "42" },
+      }).toObject(),
+    )
+
+    expect(SessionRetry.retryable(error, "google")).toBeUndefined()
+  })
+
   test("maps free limits to Go upsell action", () => {
     const error = Schema.decodeUnknownSync(SessionV1.APIError.Schema)(
       new SessionV1.APIError({
