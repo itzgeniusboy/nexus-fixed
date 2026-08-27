@@ -8,11 +8,7 @@
  */
 import { expect, test } from "bun:test"
 import { resolveAutoModel } from "../../src/util/auto-model"
-import {
-  markAutoRoute,
-  quarantinedRoutes,
-  recordGoneRoute,
-} from "../../src/util/auto-route-quarantine"
+import { markAutoRoute, quarantinedRoutes, recordGoneRoute } from "../../src/util/auto-route-quarantine"
 import type { AssistantMessage, Provider } from "@nexus-ai/sdk/v2"
 
 function memoryKV() {

@@ -20,6 +20,19 @@ export type AutoModelChoice = {
   reason: string
 }
 
+const PROVIDER_PRIORITY: Record<string, number> = {
+  nexus: 0,
+  "nexus-go": 1,
+  openai: 2,
+  "github-copilot": 3,
+  anthropic: 4,
+  google: 5,
+}
+
+function providerPriority(providerID: string) {
+  return PROVIDER_PRIORITY[providerID] ?? 99
+}
+
 export function routeKey(providerID: string, modelID: string) {
   return `${providerID}/${modelID}`
 }
@@ -70,10 +83,9 @@ export function resolveAutoModel(input: AutoModelInput): AutoModelChoice | undef
 function classify(task: string, hasImage: boolean) {
   const normalized = task.trim().toLowerCase()
   return {
-    tools:
-      /\b(?:code|implement|build|fix|refactor|terminal|bash|shell|git|test|debug|edit|file|deploy)\b/.test(
-        normalized,
-      ),
+    tools: /\b(?:code|implement|build|fix|refactor|terminal|bash|shell|git|test|debug|edit|file|deploy)\b/.test(
+      normalized,
+    ),
     vision: hasImage || /\b(?:image|screenshot|photo|picture|visual|ocr)\b/.test(normalized),
     longContext:
       /\b(?:repository|repo|codebase|multi[- ]file|multiple files|whole project|large document|long document)\b/.test(
@@ -93,10 +105,7 @@ function supports(model: Model, requirements: Requirements) {
   return true
 }
 
-function byTaskFit(
-  left: { provider: Provider; model: Model },
-  right: { provider: Provider; model: Model },
-) {
+function byTaskFit(left: { provider: Provider; model: Model }, right: { provider: Provider; model: Model }) {
   const cost = (left.model.cost?.input ?? 0) - (right.model.cost?.input ?? 0)
   if (cost !== 0) return cost
 
@@ -106,7 +115,10 @@ function byTaskFit(
   if (context !== 0) return context
 
   // Keep deterministic provider ordering as the final tie-breaker.
-  return providerPriority(left.provider.id) - providerPriority(right.provider.id) || left.model.id.localeCompare(right.model.id)
+  return (
+    providerPriority(left.provider.id) - providerPriority(right.provider.id) ||
+    left.model.id.localeCompare(right.model.id)
+  )
 }
 
 // With no credential state at all the legacy behavior applies so pure callers
