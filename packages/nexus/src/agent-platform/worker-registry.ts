@@ -168,13 +168,22 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
         }
       }
 
-      const commands = [...target.testCommands, ...target.buildCommands]
+      const allCommands = [...target.testCommands, ...target.buildCommands]
+      const commands = allCommands.filter(
+        (command) => !command.includes("connected") || context.capabilities.androidDevice,
+      )
+      const skippedConnectedChecks = allCommands.filter(
+        (command) => command.includes("connected") && !context.capabilities.androidDevice,
+      )
       if (!context.operations.runProjectChecks || commands.length === 0) {
         return {
           summary: `${kind} target detected; execution adapter is not enabled, so no commands were run.`,
           verification: [
             `Package manager: ${target.packageManager ?? "not applicable"}.`,
             ...commands.map((command) => `Available check: ${command}`),
+            ...(skippedConnectedChecks.length
+              ? [`Skipped without a connected Android device: ${skippedConnectedChecks.join(", ")}`]
+              : []),
           ],
           next: [
             "Run only the listed focused checks after the runtime confirms the device profile and project permissions.",
@@ -194,7 +203,12 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
           failed.length === 0
             ? `${kind} checks completed successfully.`
             : `${kind} checks completed with ${failed.length} failure(s).`,
-        verification: results.map((result) => `${result.exitCode === 0 ? "PASS" : "FAIL"}: ${result.command}`),
+        verification: [
+          ...results.map((result) => `${result.exitCode === 0 ? "PASS" : "FAIL"}: ${result.command}`),
+          ...(skippedConnectedChecks.length
+            ? [`Skipped without a connected Android device: ${skippedConnectedChecks.join(", ")}`]
+            : []),
+        ],
         next: failed.length
           ? ["Review the bounded command output and repair the first failing check before retrying."]
           : undefined,

@@ -22,6 +22,7 @@ function request(kind: WorkerRequest["step"]["kind"], workspace: string, objecti
       browserAutomation: false,
       webRuntime: true,
       android: false,
+      androidDevice: false,
       apkBuild: false,
       packageManagers: ["bun"],
     },

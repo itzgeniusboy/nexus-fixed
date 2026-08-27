@@ -11,6 +11,7 @@ export type AgentCapabilities = {
   browserAutomation: boolean
   webRuntime: boolean
   android: boolean
+  androidDevice: boolean
   apkBuild: boolean
   packageManagers: string[]
 }
@@ -35,6 +36,8 @@ export function detectAgentCapabilities(env: NodeJS.ProcessEnv = process.env): A
   const browserAutomation = anyCommand(["playwright", "chromium", "google-chrome", "google-chrome-stable", "chrome"])
   const packageManagers = ["bun", "npm", "pnpm", "yarn"].filter((command) => commandAvailable(command))
   const android = anyCommand(["adb", "emulator", "sdkmanager", "gradle"])
+  const androidDevice =
+    commandAvailable("adb") && spawnSync("adb", ["get-state"], { stdio: "ignore", timeout: 1_000 }).status === 0
   const apkBuild = commandAvailable("gradle")
 
   return {
@@ -48,6 +51,7 @@ export function detectAgentCapabilities(env: NodeJS.ProcessEnv = process.env): A
     browserAutomation,
     webRuntime: anyCommand(["node", "bun", "deno"]),
     android,
+    androidDevice,
     apkBuild,
     packageManagers,
   }
@@ -63,6 +67,7 @@ export function capabilitySummary(capabilities: AgentCapabilities): string[] {
   if (capabilities.browserAutomation) enabled.push("browser automation")
   if (capabilities.webRuntime) enabled.push("web runtime")
   if (capabilities.android) enabled.push("Android tooling")
+  if (capabilities.androidDevice) enabled.push("connected Android device")
   if (capabilities.apkBuild) enabled.push("APK build/test tooling")
   return enabled
 }
