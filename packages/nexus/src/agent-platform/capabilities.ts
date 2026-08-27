@@ -34,8 +34,8 @@ export function detectAgentCapabilities(env: NodeJS.ProcessEnv = process.env): A
   const browserHttpInspection = typeof globalThis.fetch === "function"
   const browserAutomation = anyCommand(["playwright", "chromium", "google-chrome", "google-chrome-stable", "chrome"])
   const packageManagers = ["bun", "npm", "pnpm", "yarn"].filter((command) => commandAvailable(command))
-  const android = anyCommand(["adb", "emulator", "sdkmanager"])
-  const apkBuild = anyCommand(["gradle", "./gradlew", "adb"])
+  const android = anyCommand(["adb", "emulator", "sdkmanager", "gradle"])
+  const apkBuild = commandAvailable("gradle")
 
   return {
     platform: process.platform,
