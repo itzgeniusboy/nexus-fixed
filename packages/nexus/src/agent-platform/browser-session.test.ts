@@ -1,6 +1,20 @@
 import { createBrowserSession, detectSensitiveBrowserStep } from "./browser-session"
+import { createManagedChromiumBrowserSession } from "./chromium-launcher"
 
 describe("secure browser session", () => {
+  test("binds BrowserSession to the managed Chromium lifecycle", async () => {
+    let stopped = false
+    const managed = createManagedChromiumBrowserSession({}, async ({ url }) => ({
+      url,
+      devtoolsUrl: "ws://test",
+      stop: async () => void (stopped = true),
+    }))
+    expect(managed.session.begin("https://example.com").state).toBe("opening")
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(managed.getChromium()?.url).toBe("https://example.com/")
+    await managed.stop()
+    expect(stopped).toBe(true)
+  })
   test("detects sensitive browser steps without extracting values", () => {
     expect(detectSensitiveBrowserStep("Please enter your password and verification code")).toBe("otp")
     expect(detectSensitiveBrowserStep("Complete CAPTCHA")).toBe("captcha")

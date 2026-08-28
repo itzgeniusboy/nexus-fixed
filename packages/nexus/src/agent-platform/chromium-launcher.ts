@@ -3,6 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { randomInt } from "node:crypto"
 import { parseBrowserHandoffTarget } from "./browser-handoff"
+import { createBrowserSession, type BrowserSession } from "./browser-session"
 import { spawn, stop, type Child } from "../util/process"
 import { errorMessage } from "../util/error"
 
@@ -19,6 +20,12 @@ export type ChromiumSession = {
   url: string
   devtoolsUrl: string
   pid?: number
+  stop: () => Promise<void>
+}
+
+export type ManagedChromiumBrowserSession = {
+  session: BrowserSession
+  getChromium: () => ChromiumSession | undefined
   stop: () => Promise<void>
 }
 
@@ -51,6 +58,26 @@ async function waitForDevTools(port: number, timeoutMs: number, signal?: AbortSi
   throw new Error(
     `Chromium DevTools did not become ready within ${timeoutMs}ms${lastError ? `: ${errorMessage(lastError)}` : ""}`,
   )
+}
+
+export function createManagedChromiumBrowserSession(
+  options: Omit<ChromiumLauncherOptions, "url"> = {},
+  launch: typeof launchChromiumSession = launchChromiumSession,
+): ManagedChromiumBrowserSession {
+  let chromium: ChromiumSession | undefined
+  const session = createBrowserSession({
+    launch: async (url) => {
+      chromium = await launch({ ...options, url })
+    },
+  })
+  return {
+    session,
+    getChromium: () => chromium,
+    stop: async () => {
+      await chromium?.stop()
+      chromium = undefined
+    },
+  }
 }
 
 export async function launchChromiumSession(options: ChromiumLauncherOptions): Promise<ChromiumSession> {
