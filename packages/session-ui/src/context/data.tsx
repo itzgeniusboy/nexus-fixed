@@ -1,5 +1,5 @@
 import type { Message, Session, Part, SnapshotFileDiff, SessionStatus, Provider } from "@nexus-ai/sdk/v2"
-import type { FileDiffInfo } from "@nexus-ai/client/promise"
+import type { FileDiffInfo } from "@opencode-ai/client/promise"
 import { createSimpleContext } from "@nexus-ai/ui/context"
 import { PreloadMultiFileDiffResult } from "@pierre/diffs/ssr"
 

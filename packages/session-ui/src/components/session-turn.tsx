@@ -4,7 +4,7 @@ import {
   Message as MessageType,
   Part as PartType,
 } from "@nexus-ai/sdk/v2/client"
-import type { FileDiffInfo } from "@nexus-ai/client/promise"
+import type { FileDiffInfo } from "@opencode-ai/client/promise"
 import type { SessionStatus } from "@nexus-ai/sdk/v2"
 import { useData } from "../context"
 import { useFileComponent } from "@nexus-ai/ui/context/file"
