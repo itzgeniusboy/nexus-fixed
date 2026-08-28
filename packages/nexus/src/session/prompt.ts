@@ -11,6 +11,7 @@ import { Agent } from "../agent/agent"
 import { MasterAgent, type MasterTask, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
 import { createMasterWorkerRegistry } from "../agent-platform/worker-registry"
 import { saveIncidentReport } from "../agent-platform/incident-response"
+import { proposeIncidentRepair } from "../agent-platform/self-improvement"
 import { Provider } from "@/provider/provider"
 import { TuiEvent } from "@/server/tui-event"
 
@@ -294,6 +295,8 @@ const layer = Layer.effect(
           onIncident: (report) => {
             const safeSessionID = input.input.sessionID.replace(/[^a-zA-Z0-9_-]/g, "_")
             void saveIncidentReport(path.join(workspace, ".nexus", `incident-${safeSessionID}.json`), report)
+            const proposal = proposeIncidentRepair(report)
+            if (proposal) toast(`Repair proposal created: ${proposal.title}`, "warning")
           },
         },
       })
