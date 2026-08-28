@@ -98,6 +98,23 @@ describe("MasterAgent", () => {
     expect(events).toEqual(["test:started:1", "test:completed:1"])
   })
 
+  test("emits a redacted incident report for a terminal worker error", async () => {
+    const root = await workspace()
+    const incidents: string[] = []
+    const agent = new MasterAgent({
+      workspace: root,
+      maxStepAttempts: 1,
+      hooks: { onIncident: (report) => incidents.push(report.incidents[0]?.message ?? "") },
+    })
+    await agent.create("Fix a failing worker")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+    await agent.executeStep("test", async () => {
+      throw new Error("worker failed with api_key=private-token")
+    })
+    expect(incidents[0]).toContain("[REDACTED]")
+    expect(incidents[0]).not.toContain("private-token")
+  })
+
   test("emits retrying and failed events for a terminal worker error", async () => {
     const root = await workspace()
     const events: string[] = []

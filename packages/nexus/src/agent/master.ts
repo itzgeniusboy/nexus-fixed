@@ -6,6 +6,7 @@ import type { AgentCapabilities } from "../agent-platform/capabilities"
 import { detectAgentCapabilities } from "../agent-platform/capabilities"
 import { classifyAdaptiveIntent, type AdaptiveIntent } from "../agent-platform/adaptive-intent"
 import { missingVerifiedFeatures, type CapabilityRegistry } from "../agent-platform/capability-registry"
+import { ingestIncidentLog, type IncidentReport } from "../agent-platform/incident-response"
 
 export type MasterTaskStatus =
   | "received"
@@ -113,6 +114,7 @@ export type MasterHooks = {
   onStatus?: (message: string, task: MasterTask) => void
   onCheckpoint?: (task: MasterTask) => void
   onWorker?: (event: MasterWorkerEvent, task: MasterTask) => void
+  onIncident?: (report: IncidentReport, task: MasterTask) => void
 }
 
 export type MasterAgentOptions = {
@@ -484,6 +486,8 @@ export class MasterAgent {
           task.error = repeatedError
             ? `Step ${step.id} stopped after the same error repeated: ${step.error}`
             : `Step ${step.id} failed after ${step.attempts} attempts: ${step.error}`
+          const failedTask = this.snapshot()
+          this.options.hooks?.onIncident?.(ingestIncidentLog(`[worker:${step.kind}] ${step.error}`), failedTask)
           this.options.hooks?.onWorker?.(
             {
               taskID: task.id,
@@ -493,7 +497,7 @@ export class MasterAgent {
               attempt: step.attempts,
               summary: step.error,
             },
-            this.snapshot(),
+            failedTask,
           )
           await this.checkpoint()
           return this.snapshot()
