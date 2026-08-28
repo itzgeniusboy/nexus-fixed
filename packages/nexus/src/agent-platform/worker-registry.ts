@@ -5,7 +5,7 @@ import { join, relative } from "node:path"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
 import { auditWebHtml } from "./web-audit"
-import type { BrowserSessionState } from "./browser-session"
+import { planBrowserAction, type BrowserSessionState } from "./browser-session"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
 import { planAndroidDeviceCommands } from "./android-audit"
 import { createVerificationReceipt, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
@@ -448,6 +448,14 @@ function browserWorker(): MasterWorker {
     kind: "browser",
     async run(request, context) {
       const url = `${request.objective} ${request.step.title}`.match(urlPattern)?.[0]
+      const actionKind = /click|press|tap/i.test(request.objective)
+        ? "click"
+        : /type|fill|enter/i.test(request.objective)
+          ? "type"
+          : /inspect|audit|test/i.test(request.objective)
+            ? "inspect"
+            : "navigate"
+      const actionPlan = planBrowserAction({ kind: actionKind, target: request.objective })
       if (!url) {
         return {
           summary: "Browser worker needs an explicit http:// or https:// URL before inspection.",
@@ -469,6 +477,7 @@ function browserWorker(): MasterWorker {
           verification: [
             `Browser session state: ${session.state}.`,
             "Sensitive credentials, OTP values, CAPTCHA answers, and approval secrets remain user-controlled.",
+            `Planned browser action: ${actionPlan.kind}; takeover required=${actionPlan.requiresTakeover}${actionPlan.reason ? ` (${actionPlan.reason})` : "."}`,
           ],
           receipts: [
             createVerificationReceipt({
@@ -501,6 +510,7 @@ function browserWorker(): MasterWorker {
         status: hasErrors ? "blocked" : "completed",
         summary: result.summary,
         verification: [
+          `Planned browser action: ${actionPlan.kind}; takeover required=${actionPlan.requiresTakeover}${actionPlan.reason ? ` (${actionPlan.reason})` : "."}`,
           `Inspected URL: ${result.url}`,
           ...(result.status === undefined ? [] : [`HTTP status: ${result.status}`]),
           ...(result.title ? [`Title: ${result.title}`] : []),
