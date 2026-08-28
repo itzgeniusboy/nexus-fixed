@@ -1,7 +1,14 @@
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createVerificationReceipt, MasterAgent, isRiskyAction, suggestMasterSteps } from "@/agent/master"
+import {
+  createVerificationReceipt,
+  MasterAgent,
+  isRiskyAction,
+  suggestAdaptiveMasterPlan,
+  suggestMasterSteps,
+} from "@/agent/master"
+import { createCapabilityRegistry, upsertFeature } from "@/agent-platform/capability-registry"
 
 const workspaces: string[] = []
 
@@ -16,6 +23,37 @@ async function workspace() {
 }
 
 describe("MasterAgent", () => {
+  test("uses verified capability records when planning new requirements", () => {
+    const capabilities = {
+      platform: "linux",
+      architecture: "x64",
+      termux: false,
+      git: true,
+      github: true,
+      browserHandoff: true,
+      browserHttpInspection: true,
+      browserAutomation: true,
+      webRuntime: true,
+      android: true,
+      androidDevice: false,
+      apkBuild: true,
+      packageManagers: ["bun"],
+    } as const
+    const registry = upsertFeature(createCapabilityRegistry(), {
+      id: "browser-session",
+      name: "browser",
+      version: "1.0.0",
+      status: "verified",
+      summary: "secure browser session",
+      files: ["agent-platform/browser-session.ts"],
+      tests: ["browser-session.test.ts"],
+      limitations: ["requires interactive adapter"],
+    })
+    const plan = suggestAdaptiveMasterPlan({ objective: "Test website UI and fix bugs", capabilities, registry })
+    expect(plan.intent.requestedWorkers).toEqual(expect.arrayContaining(["browser", "web", "coder"]))
+    expect(plan.missingFeatures).not.toContain("browser")
+  })
+
   test("suggests a coordinated specialist plan from the objective", () => {
     const steps = suggestMasterSteps(
       "Fix the web app, inspect it in the browser, test the APK, and prepare a GitHub PR",

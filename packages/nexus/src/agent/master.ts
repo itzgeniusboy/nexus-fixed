@@ -4,6 +4,8 @@ import { dirname, join } from "node:path"
 import { createHash, randomUUID } from "node:crypto"
 import type { AgentCapabilities } from "../agent-platform/capabilities"
 import { detectAgentCapabilities } from "../agent-platform/capabilities"
+import { classifyAdaptiveIntent, type AdaptiveIntent } from "../agent-platform/adaptive-intent"
+import { missingVerifiedFeatures, type CapabilityRegistry } from "../agent-platform/capability-registry"
 
 export type MasterTaskStatus =
   | "received"
@@ -120,6 +122,24 @@ export type MasterAgentOptions = {
   requireWorkerVerification?: boolean
   signal?: AbortSignal
   hooks?: MasterHooks
+}
+
+export function suggestAdaptiveMasterPlan(input: {
+  objective: string
+  capabilities?: AgentCapabilities
+  registry?: CapabilityRegistry
+}): {
+  intent: AdaptiveIntent
+  steps: Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">>
+  missingFeatures: string[]
+} {
+  const capabilities = input.capabilities ?? detectAgentCapabilities()
+  const intent = classifyAdaptiveIntent(input.objective, capabilities)
+  return {
+    intent,
+    steps: suggestMasterSteps(input.objective),
+    missingFeatures: input.registry ? missingVerifiedFeatures(input.registry, intent) : [],
+  }
 }
 
 export function suggestMasterSteps(objective: string): Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">> {
