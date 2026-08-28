@@ -7,6 +7,7 @@ import { inspectPublicBrowserPage } from "./browser-handoff"
 import { auditWebHtml } from "./web-audit"
 import type { BrowserSessionState } from "./browser-session"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
+import { planAndroidDeviceCommands } from "./android-audit"
 import { createVerificationReceipt, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
 
 export type ProjectCheckResult = {
@@ -38,6 +39,12 @@ export type BrowserInspection = {
   summary: string
 }
 
+export type AndroidDeviceCheckResult = {
+  command: string
+  exitCode: number
+  output?: string
+}
+
 export type AndroidDeviceInspection = {
   connected: boolean
   state?: string
@@ -54,6 +61,12 @@ export type MasterWorkerOperations = {
     signal?: AbortSignal
   }) => Promise<{ state: BrowserSessionState; message: string; url?: string }>
   inspectAndroidDevice?: (input: { signal?: AbortSignal }) => Promise<AndroidDeviceInspection>
+  runAndroidDeviceChecks?: (input: {
+    artifact: string
+    packageName: string
+    approvalGranted: boolean
+    signal?: AbortSignal
+  }) => Promise<readonly AndroidDeviceCheckResult[]>
   runProjectChecks?: (input: {
     workspace: string
     target: ProjectTarget
@@ -199,6 +212,52 @@ async function inspectGitHubReadOnly(input: { workspace: string; signal?: AbortS
       summary: `GitHub read-only inspection was unavailable: ${message.slice(0, 240)}`,
     }
   }
+}
+
+async function runAndroidDeviceChecksApproved(input: {
+  artifact: string
+  packageName: string
+  approvalGranted: boolean
+  signal?: AbortSignal
+}): Promise<readonly AndroidDeviceCheckResult[]> {
+  const commands = planAndroidDeviceCommands({
+    artifact: input.artifact,
+    packageName: input.packageName,
+    androidDevice: true,
+  })
+  if (!input.approvalGranted)
+    return commands.map((item) => ({
+      command: item.command.join(" "),
+      exitCode: 126,
+      output: "Blocked: explicit device approval is required.",
+    }))
+  const results: AndroidDeviceCheckResult[] = []
+  for (const item of commands) {
+    try {
+      const result = await execFileAsync(item.command[0]!, item.command.slice(1), {
+        maxBuffer: 256 * 1024,
+        timeout: item.id === "logcat" ? 8_000 : 60_000,
+        signal: input.signal,
+        windowsHide: true,
+      })
+      results.push({
+        command: item.command.join(" "),
+        exitCode: 0,
+        output: `${result.stdout}${result.stderr}`.slice(-32_000),
+      })
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined
+      const stdout = typeof error === "object" && error !== null && "stdout" in error ? error.stdout : ""
+      const stderr = typeof error === "object" && error !== null && "stderr" in error ? error.stderr : ""
+      results.push({
+        command: item.command.join(" "),
+        exitCode: typeof code === "number" ? code : 1,
+        output: `${String(stdout)}${String(stderr)}`.slice(-32_000),
+      })
+      break
+    }
+  }
+  return results
 }
 
 async function inspectAndroidDeviceReadOnly(input: { signal?: AbortSignal }): Promise<AndroidDeviceInspection> {
@@ -477,6 +536,8 @@ export function createMasterWorkerRegistry(operations: MasterWorkerOperations = 
     inspectGit: operations.inspectGit ?? inspectGitReadOnly,
     inspectGitHub: operations.inspectGitHub ?? inspectGitHubReadOnly,
     runProjectChecks: operations.runProjectChecks ?? runProjectChecksReadOnly,
+    inspectAndroidDevice: operations.inspectAndroidDevice ?? inspectAndroidDeviceReadOnly,
+    runAndroidDeviceChecks: operations.runAndroidDeviceChecks ?? runAndroidDeviceChecksApproved,
     inspectBrowser:
       operations.inspectBrowser ??
       (async ({ url, signal }) => {
