@@ -36,6 +36,18 @@ describe("incident watcher", () => {
     expect(count).toBe(1)
   })
 
+  test("ingests async process-output chunks without retaining secrets", async () => {
+    const watcher = createIncidentWatcher({
+      device: { platform: "android", termux: true, architecture: "arm64", adbConnected: false, nativeCapabilities: [] },
+    })
+    const chunks = (async function* () {
+      yield "worker failed with api_key="
+      yield new TextEncoder().encode("private-token")
+    })()
+    const report = await watcher.ingestStream(chunks)
+    expect(report.incidents[0]?.message).not.toContain("private-token")
+  })
+
   test("rejects ingestion after stop", async () => {
     const watcher = createIncidentWatcher({
       device: { platform: "linux", termux: false, architecture: "x64", adbConnected: false, nativeCapabilities: [] },

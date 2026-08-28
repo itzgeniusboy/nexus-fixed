@@ -21,6 +21,7 @@ export type IncidentWatcherOptions = {
 export type IncidentWatcher = {
   readonly intervalMs: number
   ingest: (chunk: string) => Promise<IncidentReport>
+  ingestStream: (chunks: AsyncIterable<string | Uint8Array>) => Promise<IncidentReport>
   stop: () => void
 }
 
@@ -31,6 +32,16 @@ export function createIncidentWatcher(options: IncidentWatcherOptions): Incident
 
   return {
     intervalMs,
+    async ingestStream(chunks) {
+      let combined = ""
+      for await (const chunk of chunks) {
+        if (stopped) throw new Error("Incident watcher is stopped")
+        const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)
+        combined += text
+        if (combined.length >= policy.maxBytes) break
+      }
+      return this.ingest(combined)
+    },
     async ingest(chunk) {
       if (stopped) throw new Error("Incident watcher is stopped")
       const report = ingestIncidentLog(chunk, policy)
