@@ -14,6 +14,13 @@ import semver from "semver"
 import { InstallationChannel, InstallationVersion } from "@nexus-ai/core/installation/version"
 import { NpmConfig } from "@nexus-ai/core/npm-config"
 import { InstallationEvent } from "@nexus-ai/schema/installation-event"
+export {
+  isSelfUpdateSafeToAutoPrepare,
+  planSelfUpdate,
+  type SelfUpdateInput,
+  type SelfUpdateMethod,
+  type SelfUpdatePlan,
+} from "./self-update"
 
 export type Method = "curl" | "npm" | "yarn" | "pnpm" | "bun" | "brew" | "scoop" | "choco" | "unknown"
 
@@ -218,9 +225,7 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
             return info.formulae[0].versions.stable
           }
           const response = yield* httpOk.execute(
-            HttpClientRequest.get("https://formulae.brew.sh/api/formula/nexus.json").pipe(
-              HttpClientRequest.acceptJson,
-            ),
+            HttpClientRequest.get("https://formulae.brew.sh/api/formula/nexus.json").pipe(HttpClientRequest.acceptJson),
           )
           const data = yield* HttpClientResponse.schemaBodyJson(BrewFormula)(response)
           return data.versions.stable
@@ -228,9 +233,9 @@ const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProcess.Serv
 
         if (detectedMethod === "npm" || detectedMethod === "bun" || detectedMethod === "pnpm") {
           const response = yield* httpOk.execute(
-            HttpClientRequest.get(
-              `${yield* NpmConfig.registry(process.cwd())}/nexus-ai/${InstallationChannel}`,
-            ).pipe(HttpClientRequest.acceptJson),
+            HttpClientRequest.get(`${yield* NpmConfig.registry(process.cwd())}/nexus-ai/${InstallationChannel}`).pipe(
+              HttpClientRequest.acceptJson,
+            ),
           )
           const data = yield* HttpClientResponse.schemaBodyJson(NpmPackage)(response)
           return data.version
