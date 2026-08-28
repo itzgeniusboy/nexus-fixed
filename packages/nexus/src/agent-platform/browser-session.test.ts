@@ -1,4 +1,4 @@
-import { createBrowserSession, detectSensitiveBrowserStep } from "./browser-session"
+import { createBrowserSession, detectSensitiveBrowserStep, planBrowserAction } from "./browser-session"
 import { createManagedChromiumBrowserSession } from "./chromium-launcher"
 
 describe("secure browser session", () => {
@@ -20,6 +20,24 @@ describe("secure browser session", () => {
     expect(detectSensitiveBrowserStep("Complete CAPTCHA")).toBe("captcha")
     expect(detectSensitiveBrowserStep("Confirm purchase")).toBe("approval")
     expect(detectSensitiveBrowserStep("Dashboard loaded")).toBeUndefined()
+  })
+
+  test("plans ordinary browser actions and gates sensitive targets", () => {
+    expect(planBrowserAction({ kind: "click", target: "#submit" })).toEqual({
+      kind: "click",
+      target: "#submit",
+      requiresTakeover: false,
+    })
+    expect(planBrowserAction({ kind: "type", target: "password field" })).toMatchObject({
+      kind: "type",
+      requiresTakeover: true,
+      reason: "login",
+    })
+    expect(planBrowserAction({ kind: "click", target: "Confirm purchase" })).toMatchObject({
+      kind: "click",
+      requiresTakeover: true,
+      reason: "approval",
+    })
   })
 
   test("requires user takeover before authenticated completion", async () => {

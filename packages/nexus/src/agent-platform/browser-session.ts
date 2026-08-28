@@ -10,6 +10,23 @@ export type BrowserSessionState =
   | "cancelled"
 export type BrowserPauseReason = "login" | "otp" | "captcha" | "approval" | "unknown_sensitive_step"
 
+export type BrowserAction = {
+  kind: "navigate" | "inspect" | "click" | "type"
+  target: string
+  requiresTakeover: boolean
+  reason?: BrowserPauseReason
+}
+
+export function planBrowserAction(input: { kind: BrowserAction["kind"]; target: string }): BrowserAction {
+  const reason = detectSensitiveBrowserStep(input.target)
+  return {
+    kind: input.kind,
+    target: input.target,
+    requiresTakeover: Boolean(reason),
+    ...(reason ? { reason } : {}),
+  }
+}
+
 export type BrowserSessionEvent = {
   state: BrowserSessionState
   reason?: BrowserPauseReason
