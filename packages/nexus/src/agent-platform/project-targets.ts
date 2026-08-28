@@ -10,6 +10,7 @@ export type ProjectTarget = {
   runCommands: string[]
   testCommands: string[]
   buildCommands: string[]
+  packageName?: string
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -26,6 +27,25 @@ function packageManager(root: string): ProjectTarget["packageManager"] {
 function scriptCommand(manager: NonNullable<ProjectTarget["packageManager"]>, script: string) {
   if (manager === "npm") return `npm run ${script}`
   return `${manager} run ${script}`
+}
+
+function androidPackageName(root: string): string | undefined {
+  const files = [
+    join(root, "app", "build.gradle"),
+    join(root, "app", "build.gradle.kts"),
+    join(root, "build.gradle"),
+    join(root, "build.gradle.kts"),
+  ]
+  for (const file of files) {
+    try {
+      const text = readFileSync(file, "utf8")
+      const match = text.match(/(?:applicationId|namespace)\\s*(?:[=(]\\s*)?[\"']([^\"']+)[\"']/)
+      if (match?.[1]) return match[1]
+    } catch {
+      // Optional metadata; project detection remains safe when files are unreadable.
+    }
+  }
+  return undefined
 }
 
 export function detectProjectTargets(root: string): ProjectTarget[] {
@@ -45,6 +65,7 @@ export function detectProjectTargets(root: string): ProjectTarget[] {
       runCommands: ["./gradlew tasks"],
       testCommands: ["./gradlew test", "./gradlew connectedCheck"],
       buildCommands: ["./gradlew assembleDebug", "./gradlew assembleRelease"],
+      ...(androidPackageName(root) ? { packageName: androidPackageName(root) } : {}),
     })
   }
 
