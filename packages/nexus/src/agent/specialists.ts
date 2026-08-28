@@ -11,6 +11,17 @@ export const SPECIALIST_ROLE_CONFIGS = {
     task: "deny",
     edit: "deny",
   },
+  coder: {
+    "*": "deny",
+    read: "allow",
+    grep: "allow",
+    glob: "allow",
+    list: "allow",
+    edit: "allow",
+    bash: "ask",
+    task: "deny",
+    todowrite: "deny",
+  },
   reviewer: {
     "*": "deny",
     read: "allow",
