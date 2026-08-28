@@ -400,18 +400,20 @@ download_and_install() {
         local extracted_root="$tmp_dir"
     fi
 
-    local extracted_bin="$extracted_root/nexus"
-    if [ ! -f "$extracted_bin" ]; then
-        # The new archive packs it as nexus-x64 or nexus depending on the architecture
-        if [ -f "$extracted_root/nexus-x64" ]; then
-            extracted_bin="$extracted_root/nexus-x64"
-        elif [ -f "$extracted_root/nexus-arm64" ]; then
-            extracted_bin="$extracted_root/nexus-arm64"
-        else
-            rm -rf "$tmp_dir"
-            echo -e "${RED}Downloaded archive does not contain a nexus executable.${NC}"
-            exit 1
+    # Release archives may contain a top-level directory, e.g.
+    # nexus-linux-arm64-0.1.67/nexus. Search only for the known executable
+    # names so unrelated archive contents can never be installed accidentally.
+    local extracted_bin=""
+    while IFS= read -r candidate; do
+        if [ -f "$candidate" ]; then
+            extracted_bin="$candidate"
+            break
         fi
+    done < <(find "$extracted_root" -type f \( -name nexus -o -name nexus-x64 -o -name nexus-arm64 \) -print)
+    if [ -z "$extracted_bin" ]; then
+        rm -rf "$tmp_dir"
+        echo -e "${RED}Downloaded archive does not contain a nexus executable.${NC}"
+        exit 1
     fi
 
     install_termux_runtime
