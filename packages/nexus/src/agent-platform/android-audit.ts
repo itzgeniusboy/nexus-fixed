@@ -10,6 +10,45 @@ export type AndroidTestPlan = {
   limitations: string[]
 }
 
+export type AndroidDeviceCommand = {
+  id: "install" | "launch" | "logcat"
+  command: string[]
+  approvalRequired: boolean
+  reason: string
+}
+
+export function planAndroidDeviceCommands(input: {
+  artifact: string
+  packageName: string
+  androidDevice: boolean
+}): AndroidDeviceCommand[] {
+  const artifact = input.artifact.trim()
+  if (!artifact.toLowerCase().endsWith(".apk")) throw new Error("ADB device checks require an .apk artifact")
+  if (!input.packageName.trim()) throw new Error("Android package name is required for launch testing")
+  if (!input.androidDevice) return []
+  const packageName = input.packageName.trim()
+  return [
+    {
+      id: "install",
+      command: ["adb", "install", "-r", artifact],
+      approvalRequired: true,
+      reason: "Install or replace the APK on the connected Android device.",
+    },
+    {
+      id: "launch",
+      command: ["adb", "shell", "monkey", "-p", packageName, "1"],
+      approvalRequired: true,
+      reason: "Launch the APK and interact with device state.",
+    },
+    {
+      id: "logcat",
+      command: ["adb", "logcat", "-d", "-t", "200"],
+      approvalRequired: true,
+      reason: "Collect bounded device logs for redacted crash diagnosis.",
+    },
+  ]
+}
+
 export function planAndroidArtifactTest(input: {
   artifact: string
   capabilities: Pick<AgentCapabilities, "android" | "androidDevice" | "apkBuild">

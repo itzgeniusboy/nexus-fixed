@@ -1,4 +1,4 @@
-import { planAndroidArtifactTest } from "./android-audit"
+import { planAndroidArtifactTest, planAndroidDeviceCommands } from "./android-audit"
 
 describe("Android artifact testing plan", () => {
   test("plans APK device checks only when a device is connected", () => {
@@ -9,6 +9,30 @@ describe("Android artifact testing plan", () => {
     expect(plan.artifactType).toBe("apk")
     expect(plan.canRunDeviceChecks).toBe(true)
     expect(plan.approvalRequired.some((item) => /install/i.test(item))).toBe(true)
+  })
+
+  test("plans approval-gated APK install, launch, and bounded logcat commands", () => {
+    const commands = planAndroidDeviceCommands({
+      artifact: "app-debug.apk",
+      packageName: "com.example.app",
+      androidDevice: true,
+    })
+    expect(commands.map((item) => item.id)).toEqual(["install", "launch", "logcat"])
+    expect(commands.every((item) => item.approvalRequired)).toBe(true)
+    expect(commands[0]?.command).toEqual(["adb", "install", "-r", "app-debug.apk"])
+    expect(commands[2]?.command).toEqual(["adb", "logcat", "-d", "-t", "200"])
+  })
+
+  test("does not create device commands without a connected device", () => {
+    expect(
+      planAndroidDeviceCommands({ artifact: "app.apk", packageName: "com.example.app", androidDevice: false }),
+    ).toEqual([])
+  })
+
+  test("rejects direct device execution plans for AAB files", () => {
+    expect(() =>
+      planAndroidDeviceCommands({ artifact: "app.aab", packageName: "com.example.app", androidDevice: true }),
+    ).toThrow(/\.apk/i)
   })
 
   test("keeps APK device checks checkpointed without a device", () => {
