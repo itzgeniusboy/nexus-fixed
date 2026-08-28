@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import type { AdaptiveIntent } from "./adaptive-intent"
+import type { IncidentReport } from "./incident-response"
 import { isRiskyAction } from "../agent/master"
 
 export type SelfImprovementProposal = {
@@ -12,6 +13,32 @@ export type SelfImprovementProposal = {
   requiresApproval: boolean
   activatesAutomatically: boolean
   decision: "auto_apply_after_tests" | "awaiting_approval" | "blocked"
+}
+
+export function proposeIncidentRepair(report: IncidentReport): SelfImprovementProposal | undefined {
+  const incident = report.incidents.find((item) => item.severity === "critical" || item.severity === "error")
+  if (!incident) return undefined
+  const title = `Repair recurring ${incident.source} failure ${incident.fingerprint}`
+  const id = createHash("sha256").update(`incident\0${incident.fingerprint}`).digest("hex").slice(0, 20)
+  return {
+    id,
+    title,
+    reason: `A ${incident.severity} ${incident.source} incident was observed: ${incident.message}`,
+    scope: [
+      "Reproduce the incident from redacted evidence only.",
+      "Implement the smallest typed repair inside the workspace.",
+      "Preserve Termux resource limits and existing permission boundaries.",
+    ],
+    verification: [
+      "Run focused regression tests and collect hashed receipts.",
+      "Verify secrets and raw user payloads are absent from the evidence.",
+      "Register the capability only after the repair passes verification.",
+    ],
+    status: "proposed",
+    requiresApproval: true,
+    activatesAutomatically: false,
+    decision: "awaiting_approval",
+  }
 }
 
 export function proposeSelfImprovement(intent: AdaptiveIntent): SelfImprovementProposal | undefined {

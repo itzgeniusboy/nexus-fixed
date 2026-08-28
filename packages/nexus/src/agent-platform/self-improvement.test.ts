@@ -3,6 +3,7 @@ import {
   markProposalVerified,
   planAutonomousInternalUpgrade,
   proposalSummary,
+  proposeIncidentRepair,
   proposeSelfImprovement,
 } from "./self-improvement"
 
@@ -31,6 +32,29 @@ describe("controlled self-improvement", () => {
     expect(proposal?.activatesAutomatically).toBe(false)
     expect(proposal?.verification).toEqual(expect.arrayContaining([expect.stringMatching(/lint/i)]))
     expect(proposalSummary(proposal!)).toMatch(/approval required=true/i)
+  })
+
+  test("creates an approval-gated repair proposal from redacted incident evidence", () => {
+    const report = {
+      incidents: [
+        {
+          fingerprint: "abc123",
+          severity: "error" as const,
+          source: "worker" as const,
+          message: "worker failed with api_key=[REDACTED]",
+          timestamp: "2026-08-28T00:00:00.000Z",
+        },
+      ],
+      truncated: false,
+      bytesRead: 42,
+      linesRead: 1,
+      redactions: 1,
+    }
+    const proposal = proposeIncidentRepair(report)
+    expect(proposal?.title).toContain("abc123")
+    expect(proposal?.requiresApproval).toBe(true)
+    expect(proposal?.activatesAutomatically).toBe(false)
+    expect(proposal?.verification).toEqual(expect.arrayContaining([expect.stringMatching(/secrets/i)]))
   })
 
   test("does not propose upgrades when required capabilities exist", () => {
