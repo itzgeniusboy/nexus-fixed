@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import { join, relative } from "node:path"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
+import type { BrowserSessionState } from "./browser-session"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
 import { createVerificationReceipt, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
 
@@ -39,6 +40,11 @@ export type MasterWorkerOperations = {
   inspectGit?: (input: { workspace: string; signal?: AbortSignal }) => Promise<GitInspection>
   inspectGitHub?: (input: { workspace: string; signal?: AbortSignal }) => Promise<GitHubInspection>
   inspectBrowser?: (input: { url: string; signal?: AbortSignal }) => Promise<BrowserInspection>
+  runBrowserSession?: (input: {
+    url: string
+    objective: string
+    signal?: AbortSignal
+  }) => Promise<{ state: BrowserSessionState; message: string; url?: string }>
   runProjectChecks?: (input: {
     workspace: string
     target: ProjectTarget
@@ -353,6 +359,32 @@ function browserWorker(): MasterWorker {
           next: [
             "Provide a URL; login, uploads, personal data, CAPTCHA/2FA, and external submissions remain user-controlled.",
           ],
+        }
+      }
+      if (context.operations.runBrowserSession && context.capabilities.browserAutomation) {
+        const session = await context.operations.runBrowserSession({
+          url,
+          objective: request.objective,
+          signal: request.signal,
+        })
+        const completed = session.state === "completed"
+        return {
+          status: completed ? "completed" : "blocked",
+          summary: session.message,
+          verification: [
+            `Browser session state: ${session.state}.`,
+            "Sensitive credentials, OTP values, CAPTCHA answers, and approval secrets remain user-controlled.",
+          ],
+          receipts: [
+            createVerificationReceipt({
+              command: `BROWSER ${session.url ?? url}`,
+              exitCode: completed ? 0 : 1,
+              output: session.message,
+            }),
+          ],
+          next: completed
+            ? undefined
+            : ["Complete the requested browser takeover or approval, then resume the checkpointed Master task."],
         }
       }
       if (!context.capabilities.browserHttpInspection || !context.operations.inspectBrowser) {

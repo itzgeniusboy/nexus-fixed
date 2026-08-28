@@ -75,6 +75,25 @@ describe("Master worker registry", () => {
     expect(result.verification).toContain("Only read-only inspection was requested by this worker.")
   })
 
+  test("routes sensitive browser work to user takeover and blocks until resumed", async () => {
+    const registry = createMasterWorkerRegistry({
+      runBrowserSession: async (input) => ({
+        state: "awaiting_user",
+        message: `Takeover required for ${input.url}`,
+        url: input.url,
+      }),
+    })
+    const result = await registry.run(
+      request("browser", process.cwd(), "log in at https://example.com/login", { browserAutomation: true }),
+    )
+
+    expect(result.status).toBe("blocked")
+    expect(result.summary).toMatch(/Takeover required/i)
+    expect(result.verification).toContain("Browser session state: awaiting_user.")
+    expect(result.receipts?.[0]?.exitCode).toBe(1)
+    expect(result.next?.[0]).toMatch(/takeover/i)
+  })
+
   test("does not execute browser automation when capability is unavailable", async () => {
     let called = false
     const registry = createMasterWorkerRegistry({
