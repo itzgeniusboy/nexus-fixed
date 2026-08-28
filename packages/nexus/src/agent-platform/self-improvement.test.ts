@@ -1,5 +1,10 @@
 import { classifyAdaptiveIntent } from "./adaptive-intent"
-import { markProposalVerified, proposalSummary, proposeSelfImprovement } from "./self-improvement"
+import {
+  markProposalVerified,
+  planAutonomousInternalUpgrade,
+  proposalSummary,
+  proposeSelfImprovement,
+} from "./self-improvement"
 
 const noBrowser = {
   platform: "linux",
@@ -33,11 +38,33 @@ describe("controlled self-improvement", () => {
     expect(proposeSelfImprovement(intent)).toBeUndefined()
   })
 
+  test("auto-plans low-risk workspace upgrades only after verification", () => {
+    const intent = classifyAdaptiveIntent("Test website buttons", noBrowser)
+    const proposal = proposeSelfImprovement(intent)!
+    const plan = planAutonomousInternalUpgrade({
+      proposal,
+      workspace: "/workspace/nexus",
+      changedFiles: ["packages/nexus/src/adapter.ts"],
+      actionSummary: "Add typed browser adapter and tests",
+    })
+    expect(plan.decision).toBe("auto_apply_after_tests")
+    expect(plan.requiresApproval).toBe(false)
+    expect(markProposalVerified(plan, true).status).toBe("verified")
+  })
+
   test("cannot silently activate an unverified proposal", () => {
     const intent = classifyAdaptiveIntent("Test website buttons", noBrowser)
     const proposal = proposeSelfImprovement(intent)!
     expect(markProposalVerified(proposal, false).status).toBe("blocked")
     expect(markProposalVerified(proposal, true).status).toBe("verified")
     expect(markProposalVerified(proposal, true).activatesAutomatically).toBe(false)
+    expect(
+      planAutonomousInternalUpgrade({
+        proposal,
+        workspace: "/workspace/nexus",
+        changedFiles: ["packages/nexus/src/adapter.ts"],
+        actionSummary: "git push the new adapter",
+      }).decision,
+    ).toBe("awaiting_approval")
   })
 })

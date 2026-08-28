@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
 import type { AdaptiveIntent } from "./adaptive-intent"
+import { isRiskyAction } from "../agent/master"
 
 export type SelfImprovementProposal = {
   id: string
@@ -8,8 +9,9 @@ export type SelfImprovementProposal = {
   scope: string[]
   verification: string[]
   status: "proposed" | "verified" | "blocked"
-  requiresApproval: true
-  activatesAutomatically: false
+  requiresApproval: boolean
+  activatesAutomatically: boolean
+  decision: "auto_apply_after_tests" | "awaiting_approval" | "blocked"
 }
 
 export function proposeSelfImprovement(intent: AdaptiveIntent): SelfImprovementProposal | undefined {
@@ -33,11 +35,40 @@ export function proposeSelfImprovement(intent: AdaptiveIntent): SelfImprovementP
     status: "proposed",
     requiresApproval: true,
     activatesAutomatically: false,
+    decision: "awaiting_approval",
+  }
+}
+
+export function planAutonomousInternalUpgrade(input: {
+  proposal: SelfImprovementProposal
+  workspace: string
+  changedFiles: string[]
+  actionSummary: string
+}): SelfImprovementProposal {
+  const insideWorkspace = input.changedFiles.every((file) => !file.startsWith("/") && !file.includes(".."))
+  const risky = isRiskyAction(input.actionSummary)
+  if (!insideWorkspace || risky) {
+    return { ...input.proposal, requiresApproval: true, activatesAutomatically: false, decision: "awaiting_approval" }
+  }
+  return {
+    ...input.proposal,
+    requiresApproval: false,
+    activatesAutomatically: true,
+    decision: "auto_apply_after_tests",
   }
 }
 
 export function markProposalVerified(proposal: SelfImprovementProposal, verified: boolean): SelfImprovementProposal {
-  return { ...proposal, status: verified ? "verified" : "blocked" }
+  return {
+    ...proposal,
+    status: verified ? "verified" : "blocked",
+    decision:
+      verified && proposal.decision === "auto_apply_after_tests"
+        ? "auto_apply_after_tests"
+        : verified
+          ? "awaiting_approval"
+          : "blocked",
+  }
 }
 
 export function proposalSummary(proposal: SelfImprovementProposal): string {
