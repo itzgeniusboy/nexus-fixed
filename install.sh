@@ -98,10 +98,10 @@ install_termux_foundation() {
         fi
     fi
 
-    if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
-        if ! pkg install -y ca-certificates curl tar; then
+    if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1 || ! command -v unzip >/dev/null 2>&1; then
+        if ! pkg install -y ca-certificates curl tar unzip; then
             echo -e "${RED}Unable to install required Termux download tools.${NC}"
-            echo -e "${MUTED}Run: pkg install ca-certificates curl tar${NC}"
+            echo -e "${MUTED}Run: pkg install ca-certificates curl tar unzip${NC}"
             exit 1
         fi
     fi
@@ -147,9 +147,6 @@ else
       linux-x64|linux-arm64)
         ;;
       darwin-x64|darwin-arm64|windows-x64)
-        echo -e "${RED}NEXUS does not publish a $combo release yet.${NC}"
-        echo -e "${MUTED}Available releases: https://github.com/$REPO/releases${NC}"
-        exit 1
         ;;
       *)
         echo -e "${RED}Unsupported OS/Arch: $os/$arch${NC}"
@@ -157,12 +154,11 @@ else
         ;;
     esac
 
-    if [ "$os" != "linux" ]; then
-        echo -e "${RED}NEXUS currently publishes Linux binaries only.${NC}"
-        exit 1
+    if [ "$os" = "windows" ]; then
+        archive_ext=".zip"
+    else
+        archive_ext=".tar.gz"
     fi
-
-    archive_ext=".tar.gz"
 
     is_musl=false
     if [ "$os" = "linux" ]; then
@@ -285,15 +281,41 @@ install_termux_runtime() {
     fi
 
     print_message info "${MUTED}Installing the no-root Termux glibc compatibility runtime...${NC}"
-    if ! pkg install -y glibc-repo glibc-runner; then
-        echo -e "${RED}Unable to install Termux glibc support.${NC}"
-        echo -e "${MUTED}Run this once, then rerun the NEXUS installer:${NC}"
-        echo -e "  pkg install glibc-repo glibc-runner"
-        exit 1
+    # glibc-repo and glibc-runner must be installed in sequence. If the
+    # selected mirror is stale, open the repository selector on the user's
+    # terminal even when this installer is running through `curl | bash`, then
+    # refresh indexes and retry automatically.
+    select_termux_repo_and_refresh() {
+        if command -v termux-change-repo >/dev/null 2>&1 && [ -e /dev/tty ]; then
+            print_message info "${MUTED}Opening Termux repository selector; keep Main repository enabled.${NC}"
+            termux-change-repo </dev/tty >/dev/tty 2>/dev/tty || true
+            pkg update -y >/dev/null 2>&1 || true
+            return 0
+        fi
+        return 1
+    }
+
+    if ! pkg install -y glibc-repo; then
+        if ! select_termux_repo_and_refresh || ! pkg install -y glibc-repo; then
+            echo -e "${RED}Termux glibc-repo is unavailable from the selected mirror.${NC}"
+            echo -e "${MUTED}Enable Main repository with: termux-change-repo${NC}"
+            echo -e "${MUTED}Then rerun this same one-command installer.${NC}"
+            exit 1
+        fi
+    fi
+    pkg update -y >/dev/null 2>&1 || true
+    if ! pkg install -y glibc-runner; then
+        if ! select_termux_repo_and_refresh || ! pkg install -y glibc-runner; then
+            echo -e "${RED}Termux glibc-runner is unavailable from the enabled glibc repository.${NC}"
+            echo -e "${MUTED}Enable Main and Glibc repositories with: termux-change-repo${NC}"
+            echo -e "${MUTED}Then rerun this same one-command installer.${NC}"
+            exit 1
+        fi
     fi
 
     if ! command -v grun >/dev/null 2>&1; then
-        echo -e "${RED}The glibc-runner package was installed, but 'grun' is not on PATH.${NC}"
+        echo -e "${RED}glibc-runner installed but 'grun' is not on PATH.${NC}"
+        echo -e "${MUTED}Restart Termux, then rerun the NEXUS installer.${NC}"
         exit 1
     fi
 }
@@ -370,15 +392,21 @@ download_and_install() {
         exit 1
     fi
 
-    tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
+    if [[ "$filename" == *.zip ]]; then
+        unzip -q "$tmp_dir/$filename" -d "$tmp_dir/extracted"
+        local extracted_root="$tmp_dir/extracted"
+    else
+        tar -xzf "$tmp_dir/$filename" -C "$tmp_dir"
+        local extracted_root="$tmp_dir"
+    fi
 
-    local extracted_bin="$tmp_dir/nexus"
+    local extracted_bin="$extracted_root/nexus"
     if [ ! -f "$extracted_bin" ]; then
         # The new archive packs it as nexus-x64 or nexus depending on the architecture
-        if [ -f "$tmp_dir/nexus-x64" ]; then
-            extracted_bin="$tmp_dir/nexus-x64"
-        elif [ -f "$tmp_dir/nexus-arm64" ]; then
-            extracted_bin="$tmp_dir/nexus-arm64"
+        if [ -f "$extracted_root/nexus-x64" ]; then
+            extracted_bin="$extracted_root/nexus-x64"
+        elif [ -f "$extracted_root/nexus-arm64" ]; then
+            extracted_bin="$extracted_root/nexus-arm64"
         else
             rm -rf "$tmp_dir"
             echo -e "${RED}Downloaded archive does not contain a nexus executable.${NC}"
@@ -491,7 +519,7 @@ install_command_alias() {
     local alias_dir
     local -a alias_dirs=()
     if [ "$is_termux" = "true" ] && [ -n "${PREFIX:-}" ]; then
-        alias_dirs+=("$PREFIX/bin")
+        alias_dirs+=("$PREFIX/bin" "$HOME/.local/bin")
     else
         alias_dirs+=("$HOME/.local/bin")
     fi
