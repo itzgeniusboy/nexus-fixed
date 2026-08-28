@@ -217,3 +217,10 @@ export async function saveDeveloperBugReport(path: string, report: DeveloperBugR
   await writeFile(temporary, serializeDeveloperBugReport(report), { mode: 0o600 })
   await rename(temporary, path)
 }
+
+export async function saveIncidentReport(path: string, report: IncidentReport): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const temporary = join(dirname(path), `.${path.split("/").pop() ?? "nexus-incident"}.tmp`)
+  await writeFile(temporary, `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 })
+  await rename(temporary, path)
+}

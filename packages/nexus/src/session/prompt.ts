@@ -10,6 +10,7 @@ import { Session } from "./session"
 import { Agent } from "../agent/agent"
 import { MasterAgent, type MasterTask, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
 import { createMasterWorkerRegistry } from "../agent-platform/worker-registry"
+import { saveIncidentReport } from "../agent-platform/incident-response"
 import { Provider } from "@/provider/provider"
 import { TuiEvent } from "@/server/tui-event"
 
@@ -212,6 +213,10 @@ const layer = Layer.effect(
             onStatus: (message) => {
               void message
             },
+            onIncident: (report) => {
+              const safeSessionID = input.sessionID.replace(/[^a-zA-Z0-9_-]/g, "_")
+              void saveIncidentReport(path.join(ctx.worktree, ".nexus", `incident-${safeSessionID}.json`), report)
+            },
           },
         })
         const existing = await master.resume()
@@ -285,6 +290,10 @@ const layer = Layer.effect(
           onWorker: (event) => {
             const phase = event.phase === "completed" ? "success" : event.phase === "failed" ? "error" : "info"
             toast(`${event.worker} ${event.phase}${event.summary ? `: ${event.summary}` : ""}`, phase)
+          },
+          onIncident: (report) => {
+            const safeSessionID = input.input.sessionID.replace(/[^a-zA-Z0-9_-]/g, "_")
+            void saveIncidentReport(path.join(workspace, ".nexus", `incident-${safeSessionID}.json`), report)
           },
         },
       })
