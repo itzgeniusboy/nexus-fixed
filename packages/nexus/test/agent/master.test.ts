@@ -75,6 +75,25 @@ describe("MasterAgent", () => {
     ).toEqual([])
   })
 
+  test("appends runtime repair and verification steps only once", async () => {
+    const root = await workspace()
+    const agent = new MasterAgent({ workspace: root })
+    await agent.create("Fix a failing test")
+    await agent.plan([{ id: "test", kind: "tester", title: "Run tests", dependsOn: [] }])
+    const failed = await agent.executeStep("test", async () => {
+      throw new Error("failure")
+    })
+    expect(failed.status).toBe("failed")
+
+    const replanned = await agent.replanFailedStep("test")
+    expect(replanned.status).toBe("dispatching")
+    expect(replanned.error).toBeUndefined()
+    expect(replanned.steps.map((step) => step.id)).toEqual(["test", "test-repair", "test-verify"])
+    expect(replanned.steps[1]?.dependsOn).toEqual(["test"])
+    expect(replanned.steps[2]?.dependsOn).toEqual(["test-repair"])
+    expect((await agent.replanFailedStep("test")).steps).toHaveLength(3)
+  })
+
   test("suggests a coordinated specialist plan from the objective", () => {
     const steps = suggestMasterSteps(
       "Fix the web app, inspect it in the browser, test the APK, and prepare a GitHub PR",

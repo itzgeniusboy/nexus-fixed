@@ -312,6 +312,28 @@ export class MasterAgent {
     const task = this.requireTask()
     return this.plan(suggestMasterSteps(task.objective))
   }
+  async replanFailedStep(stepID: string): Promise<MasterTask> {
+    const task = this.requireTask()
+    const step = task.steps.find((item) => item.id === stepID)
+    if (!step) throw new Error(`Master step not found: ${stepID}`)
+    const followUps = replanFailedMasterStep({ step })
+    const additions = followUps.filter((item) => !task.steps.some((existing) => existing.id === item.id))
+    if (additions.length === 0) return this.snapshot()
+    task.steps.push(
+      ...additions.map((item) => ({
+        ...item,
+        status: "dispatching" as const,
+        attempts: 0,
+        maxAttempts: this.options.maxStepAttempts ?? 2,
+      })),
+    )
+    task.status = "dispatching"
+    task.error = undefined
+    task.updatedAt = now()
+    await this.checkpoint()
+    this.status(`Queued repair and verification for failed step ${stepID}`, task)
+    return this.snapshot()
+  }
 
   async plan(steps: Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">>): Promise<MasterTask> {
     const task = this.requireTask()
