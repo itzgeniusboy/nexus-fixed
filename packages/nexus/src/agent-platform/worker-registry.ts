@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import { join, relative } from "node:path"
 import type { AgentCapabilities } from "./capabilities"
 import { inspectPublicBrowserPage } from "./browser-handoff"
+import { auditWebHtml } from "./web-audit"
 import type { BrowserSessionState } from "./browser-session"
 import { detectProjectTargets, type ProjectTarget } from "./project-targets"
 import { createVerificationReceipt, type WorkerKind, type WorkerRequest, type WorkerResult } from "../agent/master"
@@ -33,6 +34,7 @@ export type BrowserInspection = {
   url: string
   title?: string
   status?: number
+  html?: string
   summary: string
 }
 
@@ -431,13 +433,24 @@ function browserWorker(): MasterWorker {
       }
       const result = await context.operations.inspectBrowser({ url, signal: request.signal })
 
+      const audit =
+        result.html !== undefined && result.status !== undefined
+          ? auditWebHtml({ url: result.url, status: result.status, html: result.html })
+          : undefined
+      const hasErrors = result.status !== undefined && result.status >= 400
       return {
-        status: result.status !== undefined && result.status >= 400 ? "blocked" : "completed",
+        status: hasErrors ? "blocked" : "completed",
         summary: result.summary,
         verification: [
           `Inspected URL: ${result.url}`,
           ...(result.status === undefined ? [] : [`HTTP status: ${result.status}`]),
           ...(result.title ? [`Title: ${result.title}`] : []),
+          ...(audit
+            ? [
+                `Controls: ${JSON.stringify(audit.controls)}`,
+                ...audit.findings.map((finding) => `${finding.severity.toUpperCase()}: ${finding.message}`),
+              ]
+            : []),
         ],
         receipts: [
           createVerificationReceipt({
@@ -446,8 +459,12 @@ function browserWorker(): MasterWorker {
             output: result.summary,
           }),
         ],
-        ...(result.status !== undefined && result.status >= 400
-          ? { next: ["Review the HTTP failure before treating the browser step as complete."] }
+        ...(hasErrors || audit?.findings.some((finding) => finding.severity === "error")
+          ? {
+              next: [
+                "Review the HTTP/UI findings and repair the first blocking issue before treating the browser step as complete.",
+              ],
+            }
           : {}),
       }
     },
@@ -468,6 +485,7 @@ export function createMasterWorkerRegistry(operations: MasterWorkerOperations = 
           url: page.url,
           status: page.status,
           title: page.title,
+          html: page.text,
           summary: `Inspected public page (${page.status})${page.title ? `: ${page.title}` : ""}.`,
         }
       }),
