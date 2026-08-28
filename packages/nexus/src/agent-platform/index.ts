@@ -1,5 +1,7 @@
 export * from "./browser-handoff"
+export * from "./browser-session"
 export * from "./capabilities"
+export * from "./github-actions"
 export * from "./local-web"
 export * from "./project-targets"
 export * from "./worker-registry"
