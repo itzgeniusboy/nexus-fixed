@@ -1,7 +1,7 @@
 import { Config } from "@/config/config"
 import { AppRuntime } from "@/effect/app-runtime"
 import { Flag } from "@nexus-ai/core/flag/flag"
-import { Installation } from "@/installation"
+import { Installation, planSelfUpdate } from "@/installation"
 import { InstallationVersion } from "@nexus-ai/core/installation/version"
 import { GlobalBus } from "@/bus/global"
 
@@ -23,7 +23,9 @@ export async function upgrade() {
     return
   }
 
-  if (InstallationVersion === latest) return
+  if (method === "unknown") return
+  const plan = planSelfUpdate({ currentVersion: InstallationVersion, latestVersion: latest, method })
+  if (!plan.available) return
 
   const kind = Installation.getReleaseType(InstallationVersion, latest)
 
@@ -38,7 +40,6 @@ export async function upgrade() {
     return
   }
 
-  if (method === "unknown") return
   await Installation.upgrade(method, latest)
     .then(() =>
       GlobalBus.emit("event", {
