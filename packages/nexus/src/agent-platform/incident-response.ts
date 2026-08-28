@@ -1,4 +1,6 @@
 import { createHash } from "node:crypto"
+import { mkdir, rename, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 
 export type IncidentSeverity = "info" | "warning" | "error" | "critical"
 export type IncidentSource = "agent" | "worker" | "process" | "browser" | "android" | "network" | "unknown"
@@ -203,4 +205,15 @@ export function buildDeveloperBugReport(
 
 export function chooseIncidentPollIntervalMs(snapshot: DeviceHealthSnapshot): number {
   return isResourceConstrainedDevice(snapshot) ? 30_000 : 5_000
+}
+
+export function serializeDeveloperBugReport(report: DeveloperBugReport): string {
+  return `${JSON.stringify(report, null, 2)}\n`
+}
+
+export async function saveDeveloperBugReport(path: string, report: DeveloperBugReport): Promise<void> {
+  await mkdir(dirname(path), { recursive: true })
+  const temporary = join(dirname(path), `.${path.split("/").pop() ?? "nexus-report"}.tmp`)
+  await writeFile(temporary, serializeDeveloperBugReport(report), { mode: 0o600 })
+  await rename(temporary, path)
 }

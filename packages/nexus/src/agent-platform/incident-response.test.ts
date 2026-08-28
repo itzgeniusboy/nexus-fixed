@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { mkdtemp, readFile, stat } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import {
   buildDeveloperBugReport,
   chooseIncidentPollIntervalMs,
@@ -72,6 +75,23 @@ describe("incident response", () => {
     expect(JSON.stringify(result)).not.toContain("private-token")
     expect(result.version).toBeUndefined()
     expect(result.device?.termux).toBe(true)
+  })
+
+  test("exports an anonymized report atomically for offline developer sharing", async () => {
+    const report = buildDeveloperBugReport(ingestIncidentLog("[worker] api_key=private-token failed"), undefined, {
+      enabled: true,
+      includeDeviceMetrics: false,
+      includeIncidentFingerprints: true,
+      includeVersion: false,
+    })!
+    const directory = await mkdtemp(join(tmpdir(), "nexus-incident-report-"))
+    const path = join(directory, "report.json")
+    const { saveDeveloperBugReport } = await import("./incident-response")
+    await saveDeveloperBugReport(path, report)
+    const saved = await readFile(path, "utf8")
+    expect(saved).not.toContain("private-token")
+    expect(JSON.parse(saved).product).toBe("nexus")
+    expect((await stat(path)).mode & 0o777).toBe(0o600)
   })
 
   test("bounds bytes, lines, line length, and incident count", () => {
