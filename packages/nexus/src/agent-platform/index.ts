@@ -1,4 +1,5 @@
 export * from "./adaptive-intent"
+export * from "./capability-registry"
 export * from "./browser-handoff"
 export * from "./browser-session"
 export * from "./chromium-launcher"
