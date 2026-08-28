@@ -217,6 +217,11 @@ function clone<T>(value: T): T {
   return structuredClone(value)
 }
 
+function dependencySatisfied(step: MasterStep, dependency: string, task: MasterTask): boolean {
+  const status = task.steps.find((item) => item.id === dependency)?.status
+  return status === "completed" || (step.id.endsWith("-repair") && (status === "failed" || status === "blocked"))
+}
+
 function safeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -383,9 +388,7 @@ export class MasterAgent {
         (step) =>
           step.status !== "completed" &&
           step.status !== "failed" &&
-          step.dependsOn.every(
-            (dependency) => task.steps.find((item) => item.id === dependency)?.status === "completed",
-          ),
+          step.dependsOn.every((dependency) => dependencySatisfied(step, dependency, task)),
       )
       if (!next) {
         if (task.steps.some((step) => step.status === "failed")) return this.snapshot()
@@ -405,9 +408,7 @@ export class MasterAgent {
     const task = this.requireTask()
     const step = task.steps.find((item) => item.id === stepID)
     if (!step) throw new Error(`Unknown Master Agent step: ${stepID}`)
-    if (
-      step.dependsOn.some((dependency) => task.steps.find((item) => item.id === dependency)?.status !== "completed")
-    ) {
+    if (step.dependsOn.some((dependency) => !dependencySatisfied(step, dependency, task))) {
       task.status = "blocked"
       task.error = `Dependencies are incomplete for step ${stepID}`
       await this.checkpoint()
