@@ -110,6 +110,11 @@ function formatMasterTaskResult(task: MasterTask) {
   const failed = task.steps.filter((step) => step.status === "failed").length
   const lines = [
     `Master Agent ${task.status}: ${completed}/${task.steps.length} steps completed.`,
+    ...(task.activeStepID ? [`Active step: ${task.activeStepID}`] : []),
+    ...(task.status === "awaiting_approval"
+      ? ["Approval required before the next sensitive or irreversible action."]
+      : []),
+    ...(task.queuedInstructions.length ? [`Queued instructions: ${task.queuedInstructions.length}`] : []),
     ...(blocked ? [`${blocked} step(s) blocked pending capability, permission, or verification.`] : []),
     ...(failed ? [`${failed} step(s) failed after bounded recovery.`] : []),
   ]
