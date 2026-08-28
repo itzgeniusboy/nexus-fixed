@@ -108,6 +108,24 @@ describe("Master worker registry", () => {
     expect(result.summary).toMatch(/unavailable/i)
   })
 
+  test("records connected Android device evidence before project checks", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nexus-registry-device-"))
+    await writeFile(
+      join(root, "build.gradle"),
+      "plugins { id 'com.android.application' version '8.0.0' apply false }\\n",
+    )
+    const registry = createMasterWorkerRegistry({
+      inspectAndroidDevice: async () => ({ connected: true, state: "device", summary: "Pixel test device is ready." }),
+      runProjectChecks: async (input) => input.commands.map((command) => ({ command, exitCode: 0 })),
+    })
+    const result = await registry.run(
+      request("android", root, "run Android checks", { android: true, androidDevice: true }),
+    )
+
+    expect(result.status).toBe("completed")
+    expect(result.verification).toContain("Device: Pixel test device is ready.")
+  })
+
   test("skips Android connected checks without a device", async () => {
     const root = await mkdtemp(join(tmpdir(), "nexus-registry-android-"))
     await writeFile(

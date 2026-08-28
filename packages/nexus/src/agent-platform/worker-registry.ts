@@ -36,6 +36,12 @@ export type BrowserInspection = {
   summary: string
 }
 
+export type AndroidDeviceInspection = {
+  connected: boolean
+  state?: string
+  summary: string
+}
+
 export type MasterWorkerOperations = {
   inspectGit?: (input: { workspace: string; signal?: AbortSignal }) => Promise<GitInspection>
   inspectGitHub?: (input: { workspace: string; signal?: AbortSignal }) => Promise<GitHubInspection>
@@ -45,6 +51,7 @@ export type MasterWorkerOperations = {
     objective: string
     signal?: AbortSignal
   }) => Promise<{ state: BrowserSessionState; message: string; url?: string }>
+  inspectAndroidDevice?: (input: { signal?: AbortSignal }) => Promise<AndroidDeviceInspection>
   runProjectChecks?: (input: {
     workspace: string
     target: ProjectTarget
@@ -192,6 +199,28 @@ async function inspectGitHubReadOnly(input: { workspace: string; signal?: AbortS
   }
 }
 
+async function inspectAndroidDeviceReadOnly(input: { signal?: AbortSignal }): Promise<AndroidDeviceInspection> {
+  try {
+    const result = await execFileAsync("adb", ["get-state"], {
+      maxBuffer: 16 * 1024,
+      timeout: 4_000,
+      signal: input.signal,
+      windowsHide: true,
+    })
+    const state = result.stdout.trim()
+    return {
+      connected: state === "device",
+      state: state || undefined,
+      summary:
+        state === "device"
+          ? "Android device is connected and ready for device checks."
+          : `ADB state is ${state || "unknown"}.`,
+    }
+  } catch {
+    return { connected: false, summary: "Android device inspection was unavailable; no device command was run." }
+  }
+}
+
 async function inspectGitReadOnly(input: { workspace: string; signal?: AbortSignal }): Promise<GitInspection> {
   const result = await execFileAsync("git", ["-C", input.workspace, "status", "--short", "--branch"], {
     maxBuffer: 512 * 1024,
@@ -273,6 +302,10 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
         }
       }
 
+      const device =
+        kind === "android" && context.capabilities.androidDevice
+          ? await (context.operations.inspectAndroidDevice ?? inspectAndroidDeviceReadOnly)({ signal: request.signal })
+          : undefined
       const results = await context.operations.runProjectChecks({
         workspace: request.workspace,
         target,
@@ -289,6 +322,7 @@ function projectWorker(kind: "web" | "android", allow: (target: ProjectTarget) =
             : `${kind} checks completed with ${failed.length} failure(s); repair is required before success can be claimed.`,
         verification: [
           ...results.map((result) => `${result.exitCode === 0 ? "PASS" : "FAIL"}: ${result.command}`),
+          ...(device ? [`Device: ${device.summary}`] : []),
           ...artifacts.map((artifact) => `Artifact: ${artifact}`),
           ...(skippedConnectedChecks.length
             ? [`Skipped without a connected Android device: ${skippedConnectedChecks.join(", ")}`]

@@ -1,5 +1,6 @@
 export * from "./browser-handoff"
 export * from "./browser-session"
+export * from "./chromium-launcher"
 export * from "./capabilities"
 export * from "./github-actions"
 export * from "./local-web"
