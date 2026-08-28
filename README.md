@@ -10,9 +10,9 @@
 </pre>
 </div>
 <p align="center">
-  <a href="https://github.com/itzgeniusboy/nexus/discord"><img alt="Discord" src="https://img.shields.io/discord/1391832426048651334?style=flat-square&label=discord" /></a>
+  <a href="https://github.com/itzgeniusboy/nexus-fixed"><img alt="NEXUS Fixed" src="https://img.shields.io/github/v/release/itzgeniusboy/nexus-fixed?style=flat-square" /></a>
   <a href="https://www.npmjs.com/package/nexus-ai"><img alt="npm" src="https://img.shields.io/npm/v/nexus-ai?style=flat-square" /></a>
-  <a href="https://github.com/itzgeniusboy/nexus/actions/workflows/publish.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/itzgeniusboy/nexus/publish.yml?style=flat-square&branch=dev" /></a>
+  <a href="https://github.com/itzgeniusboy/nexus-fixed"><img alt="Repository" src="https://img.shields.io/github/last-commit/itzgeniusboy/nexus-fixed?style=flat-square" /></a>
 </p>
 
 <p align="center">
@@ -40,15 +40,18 @@
   <a href="README.vi.md">Tiếng Việt</a>
 </p>
 
-[![NEXUS Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://github.com/itzgeniusboy/nexus)
+[![NEXUS Terminal UI](packages/web/src/assets/lander/screenshot.png)](https://github.com/itzgeniusboy/nexus-fixed)
 
 ---
 
 ### Installation
 
 ```bash
-# YOLO
-curl -fsSL https://github.com/itzgeniusboy/nexus/releases | bash
+# Termux, Linux, and PC installer
+curl -fsSL https://raw.githubusercontent.com/itzgeniusboy/nexus-fixed/main/install.sh | bash
+
+# Pin the latest verified installer-compatible version
+curl -fsSL https://raw.githubusercontent.com/itzgeniusboy/nexus-fixed/main/install.sh | bash -s -- --version 0.1.67
 
 # Package managers
 npm i -g nexus-ai@latest        # or bun/pnpm/yarn
@@ -100,6 +103,14 @@ XDG_BIN_DIR=$HOME/.local/bin curl -fsSL https://github.com/itzgeniusboy/nexus/re
 
 ### Agents
 
+NEXUS includes the original interactive agents plus the fixed Master Agent runtime. The terminal-first autonomy layer is available from the `nexus-fixed` repository and does not require a web dashboard.
+
+### Autonomous Master Agent
+
+The Master Agent plans dependency-ordered work, dispatches typed specialists, checkpoints progress, retries bounded failures, creates repair and verification follow-ups, records SHA-256 verification receipts, discovers web/APK artifacts, and persists redacted incidents under `.nexus/`. It supports Termux/Android and PC-oriented resource limits, multi-key provider fallback, managed Chromium lifecycle, secure takeover for login/OTP/CAPTCHA, and approval-gated Android install/launch/logcat plans.
+
+Secrets, passwords, OTPs, payment actions, external Git mutations, browser takeover, and ADB mutations remain approval-gated. Real Android execution requires a connected ADB device or emulator. The full monorepo native typecheck may require more memory than a constrained environment provides; use `bun run typecheck:lowmem` or the serialized focused tests when working on Termux.
+
 NEXUS includes two built-in agents you can switch between with the `Tab` key.
 
 - **build** - Default, full-access agent for development work
@@ -111,11 +122,11 @@ NEXUS includes two built-in agents you can switch between with the `Tab` key.
 Also included is a **general** subagent for complex searches and multistep tasks.
 This is used internally and can be invoked using `@general` in messages.
 
-Learn more about [agents](https://github.com/itzgeniusboy/nexus#readme/agents).
+Learn more about [agents](https://github.com/itzgeniusboy/nexus-fixed#readme/agents). See the latest verified maintenance release: [v0.1.59-nexus-autonomy-patch3](https://github.com/itzgeniusboy/nexus-fixed/releases/tag/v0.1.59-nexus-autonomy-patch3).
 
 ### Documentation
 
-For more info on how to configure NEXUS, [**head over to our docs**](https://github.com/itzgeniusboy/nexus#readme).
+For more info on how to configure NEXUS, [**head over to the repository documentation**](https://github.com/itzgeniusboy/nexus-fixed#readme).
 
 ### Contributing
 
