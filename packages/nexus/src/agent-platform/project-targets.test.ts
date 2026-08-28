@@ -27,6 +27,19 @@ describe("project target detection", () => {
     ])
   })
 
+  test("detects Android package metadata without guessing missing values", async () => {
+    const root = await mkdtemp(join(tmpdir(), "nexus-android-package-"))
+    await mkdir(join(root, "app"))
+    await writeFile(join(root, "settings.gradle"), "include ':app'\n")
+    await writeFile(
+      join(root, "app", "build.gradle"),
+      'android { namespace "com.example.demo"; defaultConfig { applicationId "com.example.demo" } }\n',
+    )
+
+    const target = detectProjectTargets(root).find((item) => item.kind === "android")
+    expect(target?.packageName).toBe("com.example.demo")
+  })
+
   test("detects Android build files and preserves package target", async () => {
     const root = await mkdtemp(join(tmpdir(), "nexus-android-target-"))
     await mkdir(join(root, "app"))

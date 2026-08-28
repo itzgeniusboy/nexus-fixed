@@ -39,7 +39,7 @@ function androidPackageName(root: string): string | undefined {
   for (const file of files) {
     try {
       const text = readFileSync(file, "utf8")
-      const match = text.match(/(?:applicationId|namespace)\\s*(?:[=(]\\s*)?[\"']([^\"']+)[\"']/)
+      const match = text.match(/(?:applicationId|namespace)\s*(?:[=(]\s*)?["']([^"']+)["']/)
       if (match?.[1]) return match[1]
     } catch {
       // Optional metadata; project detection remains safe when files are unreadable.
