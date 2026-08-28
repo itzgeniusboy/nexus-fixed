@@ -142,6 +142,27 @@ export function suggestAdaptiveMasterPlan(input: {
   }
 }
 
+export function replanFailedMasterStep(input: {
+  step: Pick<MasterStep, "id" | "kind" | "title" | "status" | "error" | "next">
+}): Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">> {
+  if (input.step.status !== "failed" && input.step.status !== "blocked") return []
+  const repairID = `${input.step.id}-repair`
+  return [
+    {
+      id: repairID,
+      kind: input.step.kind === "tester" ? "coder" : input.step.kind,
+      title: `Repair ${input.step.title}${input.step.error ? `: ${input.step.error.slice(0, 160)}` : ""}`,
+      dependsOn: [input.step.id],
+    },
+    {
+      id: `${input.step.id}-verify`,
+      kind: "tester",
+      title: `Verify repaired ${input.step.title}`,
+      dependsOn: [repairID],
+    },
+  ]
+}
+
 export function suggestMasterSteps(objective: string): Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">> {
   const normalized = objective.trim().toLowerCase()
   const steps: Array<Pick<MasterStep, "id" | "kind" | "title" | "dependsOn">> = []

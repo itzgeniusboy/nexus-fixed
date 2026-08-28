@@ -5,6 +5,7 @@ import {
   createVerificationReceipt,
   MasterAgent,
   isRiskyAction,
+  replanFailedMasterStep,
   suggestAdaptiveMasterPlan,
   suggestMasterSteps,
 } from "@/agent/master"
@@ -52,6 +53,26 @@ describe("MasterAgent", () => {
     const plan = suggestAdaptiveMasterPlan({ objective: "Test website UI and fix bugs", capabilities, registry })
     expect(plan.intent.requestedWorkers).toEqual(expect.arrayContaining(["browser", "web", "coder"]))
     expect(plan.missingFeatures).not.toContain("browser")
+  })
+
+  test("creates repair and verification follow-ups only for failed or blocked steps", () => {
+    const followUps = replanFailedMasterStep({
+      step: {
+        id: "web",
+        kind: "web",
+        title: "Inspect website",
+        status: "blocked",
+        error: "Browser adapter unavailable",
+        next: [],
+      },
+    })
+    expect(followUps.map((step) => step.kind)).toEqual(["web", "tester"])
+    expect(followUps[1]?.dependsOn).toEqual(["web-repair"])
+    expect(
+      replanFailedMasterStep({
+        step: { id: "test", kind: "tester", title: "Run tests", status: "completed", error: undefined, next: [] },
+      }),
+    ).toEqual([])
   })
 
   test("suggests a coordinated specialist plan from the objective", () => {
