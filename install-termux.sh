@@ -39,7 +39,7 @@ mkdir -p "$HOME/.nexus/bots" "$HOME/.nexus/tools" "$HOME/.nexus/services" "$HOME
 
 if command -v termux-setup-storage >/dev/null 2>&1 && [ ! -e "$HOME/storage/shared" ]; then
   step 'Requesting shared-storage permission' '5/6'
-  termux-setup-storage || printf '%s\n' 'Storage permission was not granted; file tools remain sandboxed.'
+  termux-setup-storage || printf '%s\n' 'Shared storage permission was not granted; file tools remain limited to Termux-accessible paths.'
 else
   printf '%s\n' '[5/6] Shared storage already configured or Termux:API is unavailable.'
 fi
